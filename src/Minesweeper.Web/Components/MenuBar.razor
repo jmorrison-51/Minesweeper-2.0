@@ -1,0 +1,55 @@
+@* A Windows-style menu bar: click a title to open its list; clicking anywhere else closes it. *@
+<div class="menubar">
+    @foreach (var menu in Menus)
+    {
+        <div class="menu">
+            <button class="menu-title @(_open == menu.Title ? "open" : "")" @onclick="() => Toggle(menu)">@menu.Title</button>
+            @if (_open == menu.Title)
+            {
+                <div class="menu-list">
+                    @foreach (var item in menu.Items)
+                    {
+                        if (item == null)
+                        {
+                            <div class="menu-separator"></div>
+                            continue;
+                        }
+                        <button class="menu-item" disabled="@(!item.Enabled)" @onclick="() => Choose(item)">
+                            <span class="menu-check">@(item.Checked ? "✓" : "")</span>
+                            <span class="menu-text">@item.Text</span>
+                            <span class="menu-shortcut">@item.Shortcut</span>
+                        </button>
+                    }
+                </div>
+            }
+        </div>
+    }
+</div>
+@if (_open != null)
+{
+    <div class="menu-backdrop" @onclick="() => _open = null"></div>
+}
+
+@code {
+    public sealed record Item(string Text, Action OnChoose, string Shortcut = "", bool Enabled = true, bool Checked = false);
+
+    /// <summary>A menu; null entries in <see cref="Items"/> draw separators.</summary>
+    public sealed record Menu(string Title, IReadOnlyList<Item?> Items);
+
+    [Parameter, EditorRequired] public IReadOnlyList<Menu> Menus { get; set; } = [];
+
+    // By title: screens rebuild their menus on every redraw (Endless redraws 30 times a second).
+    private string? _open;
+
+    private void Toggle(Menu menu) => _open = _open == menu.Title ? null : menu.Title;
+
+    // The screen owns the menu actions, so it is told to redraw after one runs.
+    [Parameter] public EventCallback OnChosen { get; set; }
+
+    private async Task Choose(Item item)
+    {
+        _open = null;
+        item.OnChoose();
+        await OnChosen.InvokeAsync();
+    }
+}

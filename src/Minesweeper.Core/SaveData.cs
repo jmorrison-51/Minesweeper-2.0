@@ -149,6 +149,28 @@ public sealed class SaveData
         }
     }
 
+    /// <summary>
+    /// The save as signed, readable text for key-value storage (browser localStorage). Browsers have no AES,
+    /// so unlike the encrypted desktop files this is not hidden, but an edited value is still rejected.
+    /// </summary>
+    public string ToSignedText() => SaveCrypto.Sign(JsonSerializer.Serialize(this));
+
+    /// <summary>Reads text made by <see cref="ToSignedText"/>. False (with fresh data) if it was altered or unreadable.</summary>
+    public static bool TryFromSignedText(string? text, out SaveData save)
+    {
+        save = new SaveData();
+        if (text == null || !SaveCrypto.TryVerify(text, out string json)) return false;
+        try
+        {
+            save = (JsonSerializer.Deserialize<SaveData>(json) ?? new SaveData()).Normalized();
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     public void Save(string path) => TrySave(path, out _);
 
     /// <summary>Saves, reporting a failure (disk full, file locked, no permission) instead of throwing.</summary>

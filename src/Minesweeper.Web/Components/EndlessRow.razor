@@ -1,0 +1,53 @@
+@* One Endless row, drawn at row-local height. The parent slides it with a transform every frame; the row
+   itself redraws only when one of its tiles changes, which keeps the animation cheap. *@
+
+@for (int x = 0; x < EndlessBoard.Columns; x++)
+{
+    int col = x;
+    var cell = Board[Serial, col];
+    double cx = HexWidth * (col + 0.5 + ((Serial & 1) == 1 ? 0.5 : 0));
+    bool revealed = cell.State == CellState.Revealed;
+    var mark = !revealed ? TileArt.TileMark.None
+        : cell.IsMine ? TileArt.TileMark.Mine
+        : cell.AdjacentMines > 0 ? TileArt.TileMark.Number
+        : TileArt.TileMark.None;
+    <g @key="col" @onpointerdown="e => OnPress.InvokeAsync((Serial, col, e))">
+        @TileArt.Hex(cx, HexRadius, HexRadius, TileSize, new TileArt.Look(!revealed, cell.Exploded, mark, cell.AdjacentMines))
+    </g>
+}
+
+@code {
+    [Parameter, EditorRequired] public EndlessBoard Board { get; set; } = null!;
+    [Parameter] public int Serial { get; set; }
+    [Parameter] public int TileSize { get; set; }
+    [Parameter] public EventCallback<(int Serial, int Col, PointerEventArgs Args)> OnPress { get; set; }
+
+    private double HexWidth => TileSize * 1.1;
+    private double HexRadius => HexWidth / Math.Sqrt(3);
+
+    private int _drawn = -1;
+
+    // Everything that changes how the row looks.
+    private int Version()
+    {
+        var hash = new HashCode();
+        hash.Add(TileSize);
+        hash.Add(Serial);
+        for (int x = 0; x < EndlessBoard.Columns; x++)
+        {
+            var cell = Board[Serial, x];
+            hash.Add(cell.State);
+            hash.Add(cell.Exploded);
+            hash.Add(cell.AdjacentMines);
+        }
+        return hash.ToHashCode();
+    }
+
+    protected override bool ShouldRender()
+    {
+        int version = Version();
+        if (version == _drawn) return false;
+        _drawn = version;
+        return true;
+    }
+}

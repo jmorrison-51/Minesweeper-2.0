@@ -1,0 +1,22 @@
+@* Retro modal window. The backdrop also tells ms2.js to leave keys to the dialog. *@
+<div class="dialog-backdrop" @onclick="BackdropClick">
+    <div class="dialog" role="dialog" aria-label="@Title" @onclick:stopPropagation="true">
+        <div class="dialog-title">@Title</div>
+        <div class="dialog-body">@ChildContent</div>
+        @if (Buttons != null)
+        {
+            <div class="dialog-buttons">@Buttons</div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Buttons { get; set; }
+
+    /// <summary>Called when the player clicks outside the dialog. Leave unset to ignore those clicks.</summary>
+    [Parameter] public EventCallback OnDismiss { get; set; }
+
+    private Task BackdropClick() => OnDismiss.HasDelegate ? OnDismiss.InvokeAsync() : Task.CompletedTask;
+}

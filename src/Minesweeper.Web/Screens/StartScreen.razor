@@ -1,0 +1,97 @@
+@* Mode picker with a scoreboard beside each mode, tile size and Switch Player, like the desktop StartForm. *@
+@inject GameSession Session
+
+<PageTitle>Minesweeper 2.0</PageTitle>
+
+<div class="screen center">
+    <div class="panel wide">
+        <h1>MINESWEEPER 2.0</h1>
+        <p class="hint">
+            @(Session.IsAdmin ? "Signed in as admin (test mode) - choose a game" : $"Playing as {Session.CurrentProfile} - choose a game")
+        </p>
+
+        <div class="modes">
+            @ModeRow("Minesweeper Original", "The classic square grid. Beginner, Intermediate, Expert or Custom.", GameMode.Classic,
+                $"Fastest - {Difficulty}", Leaderboard.BestTimes(_players, Difficulty))
+            @ModeRow("Hex Minesweeper", "Hexagonal tiles, six neighbors each. Beginner, Intermediate, Expert or Custom.", GameMode.Hex,
+                $"Fastest - {Difficulty}", Leaderboard.BestTimes(_players, "Hex " + Difficulty))
+            @ModeRow("Hex Challenge", "20 levels of rising difficulty with mystery tiles and a shrinking flag budget.", GameMode.HexChallenge,
+                "Furthest level", Leaderboard.Challenge(_players))
+            @if (Save.EndlessUnlocked)
+            {
+                @ModeRow("Endless Mode", "Rows keep sliding down. Clear them before they reach the bottom.", GameMode.Endless,
+                    "Longest run", Leaderboard.Endless(_players))
+            }
+            else
+            {
+                @ModeRow("Beat Hex Challenge without using any flags",
+                    $"{Save.FlaglessLevelCount} of {ChallengeLevel.Count} levels cleared without flags", null,
+                    "Longest run", Leaderboard.Endless(_players))
+            }
+        </div>
+
+        <div class="start-footer">
+            <div class="tile-sizes">
+                <div class="label">Tile size</div>
+                <div class="tile-buttons">
+                    @foreach (int size in SaveData.TileSizes)
+                    {
+                        <button class="mode-button small @(size == Save.TileSize ? "checked" : "")" aria-pressed="@(size == Save.TileSize)"
+                                @onclick="() => SetTileSize(size)">@size</button>
+                    }
+                </div>
+            </div>
+            <button class="mode-button score-toggle" @onclick="NextDifficulty">
+                <strong>Times: @Difficulty</strong><span>click to change</span>
+            </button>
+        </div>
+
+        <button class="mode-button small switch" @onclick="Session.SwitchPlayer">Switch Player</button>
+    </div>
+</div>
+
+@code {
+    private static readonly string[] ScoreDifficulties = ["Beginner", "Intermediate", "Expert"];
+    private int _scoreDifficulty;
+    private IReadOnlyList<(string Name, SaveData Save)> _players = [];
+
+    private SaveData Save => Session.Save;
+    private string Difficulty => ScoreDifficulties[_scoreDifficulty];
+
+    protected override void OnInitialized()
+    {
+        if (!SaveData.TileSizes.Contains(Save.TileSize)) Save.TileSize = 48;
+        _players = Session.Profiles.LoadAll();
+    }
+
+    private void NextDifficulty() => _scoreDifficulty = (_scoreDifficulty + 1) % ScoreDifficulties.Length;
+
+    private void SetTileSize(int size)
+    {
+        Save.TileSize = size;
+        Session.Persist();
+    }
+
+    private RenderFragment ModeRow(string title, string description, GameMode? mode, string header, IReadOnlyList<ScoreEntry> scores) => __builder =>
+    {
+        <div class="mode-row">
+            <button class="mode-button @(mode == null ? "locked" : "")" aria-disabled="@(mode == null)"
+                    @onclick="() => { if (mode is { } m) Session.Play(m); }">
+                <strong>@title</strong>
+                <span>@description</span>
+            </button>
+            <div class="scores">
+                <div class="scores-header">@header</div>
+                @if (scores.Count == 0)
+                {
+                    <div class="score empty">No scores yet</div>
+                }
+                @foreach (var s in scores)
+                {
+                    bool mine = !Session.IsAdmin && string.Equals(s.Player, Session.CurrentProfile, StringComparison.OrdinalIgnoreCase);
+                    <div class="score @(mine ? "mine" : "")"><span>@s.Rank. @s.Player</span><span>@s.Value</span></div>
+                }
+            </div>
+        </div>
+    };
+}

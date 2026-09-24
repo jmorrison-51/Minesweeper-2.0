@@ -1,0 +1,19 @@
+@* Three-digit red counter, used for mines/rows and the timer. *@
+<div class="led" aria-label="@Label @Value">
+    <span class="led-ghost">888</span>
+    <span class="led-lit">@Text</span>
+</div>
+
+@code {
+    [Parameter] public int Value { get; set; }
+    [Parameter] public string Label { get; set; } = "";
+
+    private string Text
+    {
+        get
+        {
+            int v = Math.Clamp(Value, -99, 999);
+            return v < 0 ? "-" + Math.Abs(v).ToString("00") : v.ToString("000");
+        }
+    }
+}

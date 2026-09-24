@@ -1,0 +1,404 @@
+@* Classic, Hex and Hex Challenge: the web counterpart of the desktop MainForm. *@
+@using System.Diagnostics
+@implements IAsyncDisposable
+@inject GameSession Session
+@inject IJSRuntime JS
+
+<PageTitle>@_title</PageTitle>
+
+<div class="screen game-screen">
+<div class="game-column">
+    <MenuBar Menus="BuildMenus()" OnChosen="StateHasChanged" />
+    <div class="game-window">
+        <div class="game-header sunken">
+            <Led Value="_board.FlagsRemaining" Label="Flags left" />
+            <FaceButton Face="Face" OnClick="NewGame" />
+            <Led Value="Seconds" Label="Seconds" />
+        </div>
+        <div class="game-toolbar">
+            <span class="game-caption">@_caption</span>
+            <button class="toggle @(_flagMode ? "on" : "")" @onclick="() => _flagMode = !_flagMode"
+                    title="When on, a click or tap places a flag. Handy on touch screens.">🚩 Flag mode: @(_flagMode ? "on" : "off")</button>
+        </div>
+        <div class="sunken board-frame">
+            <BoardView @ref="_view" Board="_board" TileSize="Session.Save.TileSize" FlagMode="_flagMode"
+                       OnChanged="OnBoardChanged" OnPressingChanged="p => _pressing = p" />
+        </div>
+    </div>
+</div>
+</div>
+
+@switch (_dialog)
+{
+    case DialogKind.Message:
+        <Dialog Title="@_messageTitle">
+            <ChildContent><p class="pre">@_message</p></ChildContent>
+            <Buttons>
+                @if (_messageYes != null)
+                {
+                    <button class="button" @onclick="MessageYes">Yes</button>
+                    <button class="button" @onclick="CloseDialog">No</button>
+                }
+                else
+                {
+                    <button class="button" @onclick="CloseDialog">OK</button>
+                }
+            </Buttons>
+        </Dialog>
+        break;
+
+    case DialogKind.Custom:
+        <Dialog Title="Custom Field" OnDismiss="CloseDialog">
+            <ChildContent>
+                <form class="form-grid" @onsubmit="ApplyCustom" id="custom-form" novalidate>
+                    <label for="custom-w">Width (8-50):</label>
+                    <input id="custom-w" @ref="_customInput" type="number" min="8" max="50" @bind="_customColumns" />
+                    <label for="custom-h">Height (8-30):</label>
+                    <input id="custom-h" type="number" min="8" max="30" @bind="_customRows" />
+                    <label for="custom-m">Mines:</label>
+                    <input id="custom-m" type="number" min="1" max="1000" @bind="_customMines" />
+                    <button type="submit" class="offscreen" tabindex="-1">OK</button>
+                </form>
+            </ChildContent>
+            <Buttons>
+                <button class="button" @onclick="ApplyCustom">OK</button>
+                <button class="button" @onclick="CloseDialog">Cancel</button>
+            </Buttons>
+        </Dialog>
+        break;
+
+    case DialogKind.LevelSelect:
+        <Dialog Title="Choose Level" OnDismiss="CloseDialog">
+            <ChildContent>
+                <div class="level-grid">
+                    @for (int n = 1; n <= ChallengeLevel.Count; n++)
+                    {
+                        int level = n;
+                        bool open = level <= Session.Save.ChallengePlayable;
+                        bool flagless = Session.Save.IsFlaglessCleared(level);
+                        <button class="level-button @(level == _level ? "current" : "")" disabled="@(!open)"
+                                title="@(open ? $"Level {level}: {ChallengeLevel.Get(level).Summary}" + (flagless ? " (cleared without flags)" : "") : $"Level {level}: locked. Clear level {level - 1} first.")"
+                                @onclick="() => { CloseDialog(); GoToLevel(level); }">
+                            <span>@level@(flagless ? " ★" : "")</span>
+                            @if (Session.Save.BestTimesMs.TryGetValue(SaveData.ChallengeKey(level), out long ms))
+                            {
+                                <small>@((ms / 1000.0).ToString("0.0"))s</small>
+                            }
+                        </button>
+                    }
+                </div>
+                <p>★ cleared without flags: @Session.Save.FlaglessLevelCount of @ChallengeLevel.Count</p>
+            </ChildContent>
+            <Buttons><button class="button" @onclick="CloseDialog">Cancel</button></Buttons>
+        </Dialog>
+        break;
+
+    case DialogKind.Controls:
+        <Dialog Title="Controls" OnDismiss="CloseDialog">
+            <ChildContent>
+                <table class="controls">
+                    <tr><th colspan="2">Mouse and touch</th></tr>
+                    <tr><td>Left click / tap</td><td>Reveal a tile</td></tr>
+                    <tr><td>Right click / long press</td><td>Place or remove a flag</td></tr>
+                    <tr><td>Flag mode button</td><td>Makes a click or tap place flags</td></tr>
+                    <tr><td>Click a number, middle click, or both buttons</td><td>Reveal its neighbors when enough flags are placed</td></tr>
+                    <tr><th colspan="2">Keyboard</th></tr>
+                    <tr><td>Arrows or WASD</td><td>Move the cursor</td></tr>
+                    <tr><td>Space or Enter</td><td>Reveal the tile, or the neighbors of a number</td></tr>
+                    <tr><td>F</td><td>Place or remove a flag</td></tr>
+                    <tr><td>F2</td><td>@(_challenge ? "Retry level" : "New game")</td></tr>
+                    @if (_challenge)
+                    {
+                        <tr><td>F3 / F4</td><td>Next level / choose level</td></tr>
+                    }
+                </table>
+            </ChildContent>
+            <Buttons><button class="button" @onclick="CloseDialog">OK</button></Buttons>
+        </Dialog>
+        break;
+}
+
+@code {
+    [Parameter] public GameMode Mode { get; set; }
+
+    private enum DialogKind { None, Message, Custom, LevelSelect, Controls }
+
+    private readonly Stopwatch _stopwatch = new();
+    private readonly CancellationTokenSource _stop = new();
+    private BoardView? _view;
+    private DotNetObjectReference<BoardScreen>? _self;
+    private int _keysId;
+
+    private BoardShape _shape;
+    private bool _challenge;
+    private Difficulty _difficulty = Difficulty.Beginner;
+    private Board _board = null!;
+    private int _level = 1;
+    private bool _bestTimeRecorded, _startRecorded, _pressing, _flagMode;
+    private string _title = "", _caption = "";
+
+    private DialogKind _dialog;
+    private string _messageTitle = "", _message = "";
+    private Action? _messageYes;
+    private int _customColumns, _customRows, _customMines;
+    private ElementReference _customInput;
+    private bool _focusCustom;
+
+    private SaveData Save => Session.Save;
+    private int Seconds => Math.Min(999, (int)_stopwatch.Elapsed.TotalSeconds);
+
+    private FaceButton.FaceKind Face => _board.Status switch
+    {
+        GameStatus.Won => FaceButton.FaceKind.Cool,
+        GameStatus.Lost => FaceButton.FaceKind.Dead,
+        _ => _pressing ? FaceButton.FaceKind.Surprised : FaceButton.FaceKind.Smile,
+    };
+
+    protected override void OnInitialized()
+    {
+        _shape = Mode == GameMode.Classic ? BoardShape.Square : BoardShape.Hex;
+        _challenge = Mode == GameMode.HexChallenge;
+
+        _difficulty = (_shape == BoardShape.Hex ? Save.LastHexDifficulty : Save.LastDifficulty) switch
+        {
+            "Intermediate" => Difficulty.Intermediate,
+            "Expert" => Difficulty.Expert,
+            "Custom" => Difficulty.Custom(Save.CustomColumns, Save.CustomRows, Save.CustomMines),
+            _ => Difficulty.Beginner,
+        };
+        _difficulty = _difficulty.WithShape(_shape);
+        if (_challenge) _level = Math.Clamp(Save.ChallengeCurrent, 1, Save.ChallengePlayable);
+
+        NewGame();
+        _ = RunClock();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusCustom && _dialog == DialogKind.Custom)
+        {
+            _focusCustom = false;
+            await _customInput.FocusAsync();
+        }
+        if (!firstRender) return;
+        _self = DotNetObjectReference.Create(this);
+        _keysId = await JS.InvokeAsync<int>("ms2.keys.listen", _self);
+    }
+
+    // Redraws the timer while a game runs.
+    private async Task RunClock()
+    {
+        try
+        {
+            while (!_stop.IsCancellationRequested)
+            {
+                await Task.Delay(250, _stop.Token);
+                if (_stopwatch.IsRunning) StateHasChanged();
+            }
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    private IReadOnlyList<MenuBar.Menu> BuildMenus()
+    {
+        var game = new List<MenuBar.Item?>();
+        if (_challenge)
+        {
+            game.Add(new("Retry Level", NewGame, "F2"));
+            game.Add(new("Next Level", () => GoToLevel(_level + 1), "F3", Enabled: _level < Save.ChallengePlayable));
+            game.Add(new("Choose Level...", () => _dialog = DialogKind.LevelSelect, "F4"));
+        }
+        else
+        {
+            game.Add(new("New", NewGame, "F2"));
+            game.Add(null);
+            foreach (var d in new[] { Difficulty.Beginner, Difficulty.Intermediate, Difficulty.Expert })
+                game.Add(new(d.Name, () => SetDifficulty(d.WithShape(_shape)), Checked: _difficulty.Name == d.Name));
+            game.Add(new("Custom...", ShowCustom, Checked: _difficulty.Name == "Custom"));
+            game.Add(null);
+            game.Add(new("Best Times...", ShowBestTimes));
+        }
+        game.Add(null);
+        game.Add(new("Main Menu", ToMenu));
+
+        return
+        [
+            new MenuBar.Menu("Game", game),
+            new MenuBar.Menu("Help", [new("Controls...", () => _dialog = DialogKind.Controls, "F1")]),
+        ];
+    }
+
+    private void SetDifficulty(Difficulty difficulty)
+    {
+        _difficulty = difficulty;
+        NewGame();
+    }
+
+    private void GoToLevel(int level)
+    {
+        _level = Math.Clamp(level, 1, Save.ChallengePlayable);
+        NewGame();
+    }
+
+    private void NewGame()
+    {
+        _stopwatch.Reset();
+        _bestTimeRecorded = _startRecorded = _pressing = false;
+
+        if (_challenge)
+        {
+            var level = ChallengeLevel.Get(_level);
+            _difficulty = level.Difficulty;
+            _board = new Board(level.Difficulty, null, Save.ChallengeRules(_level));
+            Save.ChallengeCurrent = _level;
+            _title = $"Hex Challenge - Level {_level}";
+            _caption = $"Level {_level} of {ChallengeLevel.Count}" + (Save.NeedsGuaranteedOpener(_level) ? " - guaranteed opening" : "");
+        }
+        else
+        {
+            _board = new Board(_difficulty);
+            if (_shape == BoardShape.Hex) Save.LastHexDifficulty = _difficulty.Name;
+            else Save.LastDifficulty = _difficulty.Name;
+            _title = _shape == BoardShape.Hex ? "Hex Minesweeper" : "Minesweeper";
+            _caption = _difficulty.Name == "Custom"
+                ? $"Custom {_difficulty.Columns}x{_difficulty.Rows}, {_difficulty.Mines} mine{(_difficulty.Mines == 1 ? "" : "s")}"
+                : _difficulty.Name;
+        }
+        Session.Persist();
+    }
+
+    private void OnBoardChanged()
+    {
+        if (_board.Status == GameStatus.Playing && !_stopwatch.IsRunning) _stopwatch.Start();
+
+        if (_board.Status is GameStatus.Won or GameStatus.Lost)
+        {
+            _stopwatch.Stop();
+            if (_board.Status == GameStatus.Won) RecordWin();
+        }
+
+        // Once a challenge game's start is decided, track bad starts for the guaranteed opening.
+        if (_challenge && !_startRecorded && (_board.RevealActions >= 2 || _board.Status is GameStatus.Won or GameStatus.Lost))
+        {
+            _startRecorded = true;
+            Save.RecordChallengeStart(_level, _board.OpeningGuessFailed);
+            Session.Persist();
+        }
+    }
+
+    private void RecordWin()
+    {
+        if (_bestTimeRecorded) return;
+        _bestTimeRecorded = true;
+        long ms = SaveData.SolveTime(_stopwatch.ElapsedMilliseconds);
+
+        if (_challenge)
+        {
+            int cleared = _level;
+            bool newBest = Save.TrySetBestTime(_difficulty.Key, ms);
+            int? next = Save.CompleteChallengeLevel(cleared);
+            bool flagless = _board.FlagsPlaced == 0;
+            bool endlessWasUnlocked = Save.EndlessUnlocked;
+            if (flagless) Save.MarkFlaglessClear(cleared);
+            bool endlessJustUnlocked = !endlessWasUnlocked && Save.EndlessUnlocked;
+            Session.Persist();
+
+            string message = $"Level {cleared} cleared in {ms / 1000.0:0.00} seconds" + (newBest ? " - a new best!" : ".");
+            if (flagless) message += $"\nNo flags used! ({Save.FlaglessLevelCount} of {ChallengeLevel.Count} levels flagless)";
+            if (endlessJustUnlocked) message += "\n\nEndless Mode is unlocked. Find it on the main menu!";
+            if (next is int n) ShowMessage("Level Cleared", $"{message}\n\nPlay level {n}?", () => GoToLevel(n));
+            else ShowMessage("Challenge Complete", $"{message}\n\nYou have cleared all {ChallengeLevel.Count} levels of the Hex Challenge!");
+            return;
+        }
+
+        if (_difficulty.Name == "Custom") return;
+        if (Save.TrySetBestTime(_difficulty.Key, ms))
+        {
+            Session.Persist();
+            ShowMessage("Fastest Time", $"New best time for {_difficulty.Name}: {ms / 1000.0:0.00} seconds!");
+        }
+    }
+
+    private void ShowMessage(string title, string message, Action? onYes = null)
+    {
+        _messageTitle = title;
+        _message = message;
+        _messageYes = onYes;
+        _dialog = DialogKind.Message;
+    }
+
+    private void MessageYes()
+    {
+        var yes = _messageYes;
+        CloseDialog();
+        yes?.Invoke();
+    }
+
+    private void CloseDialog()
+    {
+        _dialog = DialogKind.None;
+        _messageYes = null;
+    }
+
+    private void ShowCustom()
+    {
+        _customColumns = Save.CustomColumns;
+        _customRows = Save.CustomRows;
+        _customMines = Save.CustomMines;
+        _dialog = DialogKind.Custom;
+        _focusCustom = true;
+    }
+
+    private void ApplyCustom()
+    {
+        var custom = Difficulty.Custom(_customColumns, _customRows, _customMines);
+        Save.CustomColumns = custom.Columns;
+        Save.CustomRows = custom.Rows;
+        Save.CustomMines = custom.Mines;
+        CloseDialog();
+        SetDifficulty(custom.WithShape(_shape));
+    }
+
+    private void ShowBestTimes()
+    {
+        string Line(Difficulty d) =>
+            Save.BestTimesMs.TryGetValue(d.WithShape(_shape).Key, out long ms) ? $"{ms / 1000.0:0.00} seconds" : "--";
+        ShowMessage("Best Times",
+            $"Beginner: {Line(Difficulty.Beginner)}\nIntermediate: {Line(Difficulty.Intermediate)}\nExpert: {Line(Difficulty.Expert)}");
+    }
+
+    private void ToMenu()
+    {
+        Session.Persist();
+        Session.ToMenu();
+    }
+
+    [JSInvokable]
+    public void OnKey(string key)
+    {
+        if (_dialog != DialogKind.None) return;
+        switch (key)
+        {
+            case "F1": _dialog = DialogKind.Controls; break;
+            case "F2": NewGame(); break;
+            case "F3" when _challenge && _level < Save.ChallengePlayable: GoToLevel(_level + 1); break;
+            case "F4" when _challenge: _dialog = DialogKind.LevelSelect; break;
+            default:
+                if (_view?.HandleKey(key) == true) OnBoardChanged();
+                break;
+        }
+        StateHasChanged();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _stop.Cancel();
+        Session.Persist();
+        try
+        {
+            await JS.InvokeVoidAsync("ms2.keys.stop", _keysId);
+        }
+        catch (JSDisconnectedException) { }
+        _self?.Dispose();
+    }
+}

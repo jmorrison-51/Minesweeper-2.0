@@ -1,0 +1,251 @@
+@* Draws a Board (square or hex) as SVG and turns clicks, taps and keys into Board calls.
+   Each tile is its own element, so the browser does the hit-testing. *@
+
+<div class="board-area">
+    <svg class="board" viewBox="0 0 @Width @Height" width="@Width" height="@Height"
+         style="@SizeStyle(Width, Height, TileSize)"
+         @oncontextmenu:preventDefault="true" @onmouseleave="Leave" @onmouseup="BoardUp">
+        @for (int y = 0; y < Board.Rows; y++)
+        {
+            for (int x = 0; x < Board.Columns; x++)
+            {
+                int cx = x, cy = y;
+                <g @key="(cx, cy)" @onmousedown="e => Down(cx, cy, e)" @onmouseup="e => Up(cx, cy, e)"
+                   @onmouseenter="() => Enter(cx, cy)" @oncontextmenu="() => Context(cx, cy)">
+                    @if (IsHex)
+                    {
+                        var c = HexCenter(cx, cy);
+                        @TileArt.Hex(c.X, c.Y, HexRadius, TileSize, LookAt(cx, cy))
+                    }
+                    else
+                    {
+                        @TileArt.Square(cx * TileSize, cy * TileSize, TileSize, LookAt(cx, cy))
+                    }
+                </g>
+            }
+        }
+        @if (Board.InBounds(_cursorX, _cursorY))
+        {
+            if (IsHex)
+            {
+                var c = HexCenter(_cursorX, _cursorY);
+                @TileArt.HexCursor(c.X, c.Y, HexRadius, TileSize)
+            }
+            else
+            {
+                @TileArt.SquareCursor(_cursorX * TileSize, _cursorY * TileSize, TileSize)
+            }
+        }
+    </svg>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public Board Board { get; set; } = null!;
+    [Parameter] public int TileSize { get; set; } = 36;
+
+    /// <summary>Touch-friendly: a plain click or tap flags instead of revealing.</summary>
+    [Parameter] public bool FlagMode { get; set; }
+
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    /// <summary>True while a tile is held down, for the surprised face.</summary>
+    [Parameter] public EventCallback<bool> OnPressingChanged { get; set; }
+
+    /// <summary>Smallest tile, in pixels, before a board scrolls instead of shrinking: still easy to tap.</summary>
+    public const double MinTile = 28;
+
+    /// <summary>
+    /// CSS that shrinks a board to fit the window both ways, keeping its shape, but never below
+    /// <paramref name="minTile"/> (then it scrolls). --board-chrome (app.css) is the height of everything around it.
+    /// </summary>
+    public static string SizeStyle(double width, double height, int tileSize, double minTile = MinTile)
+    {
+        double min = Math.Round(width * Math.Min(1, minTile / tileSize));
+        double ratio = width / height;
+        return $"width: max({min}px, min({width}px, 100vw - var(--board-side), (100vh - var(--board-chrome)) * {ratio:0.####})); " +
+               $"aspect-ratio: {width} / {height}; height: auto";
+    }
+
+    private bool IsHex => Board.Difficulty.Shape == BoardShape.Hex;
+    private double HexWidth => TileSize * 1.1;
+    private double HexRadius => HexWidth / Math.Sqrt(3);
+
+    private double Width => IsHex ? Math.Ceiling(HexWidth * (Board.Columns + 0.5)) : Board.Columns * TileSize;
+    private double Height => IsHex ? Math.Ceiling(HexRadius * (1.5 * (Board.Rows - 1) + 2)) : Board.Rows * TileSize;
+
+    private (double X, double Y) HexCenter(int x, int y) =>
+        (HexWidth * (x + 0.5 + ((y & 1) == 1 ? 0.5 : 0)), HexRadius * (1 + 1.5 * y));
+
+    private bool _leftDown, _rightDown, _middleDown, _chording, _chordDone, _suppressContext;
+    private int _hoverX = -1, _hoverY = -1;
+    private int _cursorX = -1, _cursorY = -1;
+    private Board? _lastBoard;
+
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(Board, _lastBoard)) return;
+        _lastBoard = Board;
+        _leftDown = _rightDown = _middleDown = _chording = _chordDone = false;
+        _hoverX = _hoverY = -1;
+        if (!Board.InBounds(_cursorX, _cursorY)) _cursorX = _cursorY = -1;
+    }
+
+    private bool InPlay => Board.Status is GameStatus.Ready or GameStatus.Playing;
+
+    private TileArt.Look LookAt(int x, int y)
+    {
+        Cell cell = Board[x, y];
+        bool pressed = InPlay && _hoverX >= 0 && (_chording
+            ? (x == _hoverX && y == _hoverY) || Board.Neighbors(_hoverX, _hoverY).Contains((x, y))
+            : _leftDown && !FlagMode && x == _hoverX && y == _hoverY);
+        bool raised = (cell.State != CellState.Revealed && !pressed) || cell.State == CellState.Flagged;
+
+        var mark = TileArt.TileMark.None;
+        if (cell.State == CellState.Flagged)
+            mark = Board.Status == GameStatus.Lost && !cell.IsMine ? TileArt.TileMark.WrongFlag : TileArt.TileMark.Flag;
+        else if (cell.State == CellState.Revealed)
+            mark = cell.IsMine ? TileArt.TileMark.Mine
+                : Board.IsNumberHidden(x, y) ? TileArt.TileMark.Mystery
+                : cell.AdjacentMines > 0 ? TileArt.TileMark.Number
+                : TileArt.TileMark.None;
+
+        return new TileArt.Look(raised, cell.Exploded, mark, cell.AdjacentMines);
+    }
+
+    private async Task Down(int x, int y, MouseEventArgs e)
+    {
+        _cursorX = _cursorY = -1;
+        _suppressContext = false;
+        if (e.Button == 0) _leftDown = true;
+        else if (e.Button == 2) _rightDown = true;
+        else if (e.Button == 1) _middleDown = true;
+        else return;
+
+        if ((_leftDown && _rightDown) || _middleDown) _chording = true;
+        _hoverX = x;
+        _hoverY = y;
+        await Pressing();
+    }
+
+    private async Task Enter(int x, int y)
+    {
+        if (!_leftDown && !_rightDown && !_middleDown) return;
+        _hoverX = x;
+        _hoverY = y;
+        await Pressing();
+    }
+
+    private bool _upHandled;
+
+    // Runs after a tile's handler (the event bubbles). A release between hex tiles reaches only this one.
+    private async Task BoardUp(MouseEventArgs e)
+    {
+        if (_upHandled)
+        {
+            _upHandled = false;
+            return;
+        }
+        await Leave();
+    }
+
+    private async Task Up(int x, int y, MouseEventArgs e)
+    {
+        _upHandled = true;
+        bool wasLeft = _leftDown, wasRight = _rightDown;
+        if (e.Button == 0) _leftDown = false;
+        else if (e.Button == 2) _rightDown = false;
+        else if (e.Button == 1) _middleDown = false;
+        else return;
+
+        if (_chording)
+        {
+            if (!_chordDone)
+            {
+                _chordDone = true;
+                Board.Chord(x, y);
+                _suppressContext = true;
+            }
+            if (!_leftDown && !_rightDown && !_middleDown) _chording = _chordDone = false;
+        }
+        else if (e.Button == 0 && wasLeft)
+        {
+            if (FlagMode) Board.ToggleFlag(x, y);
+            // Clicking a revealed number is a quicker chord for the web; it does nothing unless the flags match.
+            else if (Board[x, y].State == CellState.Revealed) Board.Chord(x, y);
+            else Board.Reveal(x, y);
+        }
+        else if (e.Button == 2 && wasRight)
+        {
+            Board.ToggleFlag(x, y);
+            _suppressContext = true; // the context menu event that follows a right click must not flag again
+        }
+
+        if (!_leftDown && !_rightDown && !_middleDown) _hoverX = _hoverY = -1;
+        await Pressing();
+        await OnChanged.InvokeAsync();
+    }
+
+    // A long press on a touch screen raises only a context menu event: treat it as placing a flag.
+    // After a real right click (mac browsers raise it on press, Windows after release) it is ignored.
+    private async Task Context(int x, int y)
+    {
+        if (_suppressContext || _leftDown || _middleDown || _rightDown)
+        {
+            _suppressContext = false;
+            return;
+        }
+        Board.ToggleFlag(x, y);
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task Leave()
+    {
+        _leftDown = _rightDown = _middleDown = _chording = _chordDone = false;
+        _hoverX = _hoverY = -1;
+        await Pressing();
+    }
+
+    private bool _wasPressing;
+
+    private async Task Pressing()
+    {
+        bool pressing = InPlay && _leftDown && !FlagMode && _hoverX >= 0;
+        if (pressing == _wasPressing) return;
+        _wasPressing = pressing;
+        await OnPressingChanged.InvokeAsync(pressing);
+    }
+
+    /// <summary>
+    /// Keyboard play: arrows or WASD move the cursor, Space/Enter reveal (or chord a revealed number), F flags.
+    /// Returns true if the key was used; the caller then reacts to the change.
+    /// </summary>
+    public bool HandleKey(string key)
+    {
+        (int dx, int dy) = key switch
+        {
+            "ArrowLeft" or "a" => (-1, 0),
+            "ArrowRight" or "d" => (1, 0),
+            "ArrowUp" or "w" => (0, -1),
+            "ArrowDown" or "s" => (0, 1),
+            _ => (0, 0),
+        };
+        bool act = key is " " or "Enter" or "f";
+        if (dx == 0 && dy == 0 && !act) return false;
+
+        if (_cursorX < 0)
+        {
+            _cursorX = Board.Columns / 2;
+            _cursorY = Board.Rows / 2;
+            if (!act) { StateHasChanged(); return true; }
+        }
+        _cursorX = Math.Clamp(_cursorX + dx, 0, Board.Columns - 1);
+        _cursorY = Math.Clamp(_cursorY + dy, 0, Board.Rows - 1);
+
+        if (key == "f") Board.ToggleFlag(_cursorX, _cursorY);
+        else if (act && Board[_cursorX, _cursorY].State == CellState.Revealed) Board.Chord(_cursorX, _cursorY);
+        else if (act) Board.Reveal(_cursorX, _cursorY);
+
+        StateHasChanged();
+        return true;
+    }
+}

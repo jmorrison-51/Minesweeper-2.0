@@ -1,0 +1,298 @@
+@* Endless Mode: the web counterpart of the desktop EndlessForm and EndlessControl. *@
+@using System.Diagnostics
+@implements IAsyncDisposable
+@inject GameSession Session
+@inject IJSRuntime JS
+
+<PageTitle>@(_paused ? "Endless Mode - Paused" : "Endless Mode")</PageTitle>
+
+<div class="screen game-screen">
+<div class="game-column">
+    <MenuBar Menus="Menus" OnChosen="StateHasChanged" />
+    <div class="game-window">
+        <div class="game-header sunken">
+            <Led Value="_board.RowsCleared" Label="Rows cleared" />
+            <FaceButton Face="@(_board.Status == GameStatus.Lost ? FaceButton.FaceKind.Dead : FaceButton.FaceKind.Smile)" OnClick="NewGame" />
+            <Led Value="(int)_board.Elapsed" Label="Seconds" />
+        </div>
+        <div class="game-toolbar">
+            <span class="game-caption">@(_board.Status == GameStatus.Ready ? "Reveal a tile to start" : _paused ? "Paused" : "")</span>
+            <button class="toggle" disabled="@(_board.Status != GameStatus.Playing)" @onclick="TogglePause">@(_paused ? "▶ Carry on" : "⏸ Pause")</button>
+        </div>
+        <div class="sunken board-frame">
+            <div class="board-area">
+                @* The whole field should stay in view (rows reaching an unseen bottom would end the run), so tiles
+                   may shrink to 14 px here, not 28 like the other boards, before the page has to scroll. *@
+                <svg class="board" viewBox="0 0 @Width @Height" width="@Width" height="@Height"
+                     style="@BoardView.SizeStyle(Width, Height, TileSize, minTile: 14)" @oncontextmenu:preventDefault="true">
+                    <rect width="100%" height="100%" fill="#c0c0c0" />
+                    @if (!_paused)
+                    {
+                        foreach (int serial in _board.VisibleRows)
+                        {
+                            double top = HexRadius * 1.5 * _board.SlotPosition(serial);
+                            if (top > Height) continue;
+                            <g @key="serial" transform="translate(0 @top.ToString("0.##"))">
+                                <EndlessRow Board="_board" Serial="serial" TileSize="TileSize" OnPress="Press" />
+                            </g>
+                        }
+                        if (_board.IsVisibleRow(_cursorRow) && _cursorCol >= 0)
+                        {
+                            double cy = HexRadius * (1 + 1.5 * _board.SlotPosition(_cursorRow));
+                            double cx = HexWidth * (_cursorCol + 0.5 + ((_cursorRow & 1) == 1 ? 0.5 : 0));
+                            @TileArt.HexCursor(cx, cy, HexRadius, TileSize)
+                        }
+                    }
+                    @* The bottom edge is the danger line: a row that reaches it ends the run. *@
+                    <rect x="0" y="@(Height - Bar)" width="@Width" height="@Bar" fill="#c80000" />
+                </svg>
+                @if (_paused)
+                {
+                    <div class="paused-overlay" @onclick="TogglePause">
+                        <strong>PAUSED</strong>
+                        <span>Press P or Esc, or click here, to carry on</span>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+</div>
+
+@if (_message != null)
+{
+    <Dialog Title="@_messageTitle" OnDismiss="() => _message = null">
+        <ChildContent><p class="pre">@_message</p></ChildContent>
+        <Buttons><button class="button" @onclick="() => _message = null">OK</button></Buttons>
+    </Dialog>
+}
+@if (_showControls)
+{
+    <Dialog Title="Controls" OnDismiss="() => _showControls = false">
+        <ChildContent>
+            <table class="controls">
+                <tr><th colspan="2">Mouse and touch</th></tr>
+                <tr><td>Click / tap</td><td>Reveal a tile (acts as soon as you press)</td></tr>
+                <tr><th colspan="2">Keyboard</th></tr>
+                <tr><td>Arrows or WASD</td><td>Move the cursor (it rides along with its row)</td></tr>
+                <tr><td>Space or Enter</td><td>Reveal the tile under the cursor</td></tr>
+                <tr><td>P or Esc</td><td>Pause / carry on (the field is hidden while paused)</td></tr>
+                <tr><td>F2</td><td>New run (the current run still counts)</td></tr>
+            </table>
+            <p>The run also pauses when you switch to another window or tab.</p>
+        </ChildContent>
+        <Buttons><button class="button" @onclick="() => _showControls = false">OK</button></Buttons>
+    </Dialog>
+}
+
+@code {
+    private readonly CancellationTokenSource _stop = new();
+    private DotNetObjectReference<EndlessScreen>? _self;
+    private int _keysId, _focusId;
+
+    private EndlessBoard _board = new();
+    private bool _paused, _recorded, _showControls;
+    private string? _message;
+    private string _messageTitle = "";
+    private int _cursorRow = -1, _cursorCol = -1;
+
+    private SaveData Save => Session.Save;
+    private int TileSize => Save.TileSize;
+    private double HexWidth => TileSize * 1.1;
+    private double HexRadius => HexWidth / Math.Sqrt(3);
+    private double Width => Math.Ceiling(HexWidth * (EndlessBoard.Columns + 0.5));
+    private double Height => Math.Ceiling(HexRadius * (1.5 * (EndlessBoard.Capacity - 1) + 2));
+    private double Bar => Math.Max(4, TileSize / 8);
+
+    private IReadOnlyList<MenuBar.Menu> Menus =>
+    [
+        new MenuBar.Menu("Game",
+        [
+            new("New", NewGame, "F2"),
+            new("Pause", TogglePause, "P", Enabled: _board.Status == GameStatus.Playing, Checked: _paused),
+            null,
+            new("Best Run...", ShowBestRun),
+            null,
+            new("Main Menu", ToMenu),
+        ]),
+        new MenuBar.Menu("Help", [new("Controls...", ShowControls, "F1")]),
+    ];
+
+    protected override void OnInitialized() => _ = RunLoop();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _self = DotNetObjectReference.Create(this);
+        _keysId = await JS.InvokeAsync<int>("ms2.keys.listen", _self);
+        _focusId = await JS.InvokeAsync<int>("ms2.focus.listen", _self);
+    }
+
+    // Moves time forward about 30 times a second. Long gaps (a sleeping laptop) count as at most a quarter second.
+    private async Task RunLoop()
+    {
+        long last = Stopwatch.GetTimestamp();
+        try
+        {
+            while (!_stop.IsCancellationRequested)
+            {
+                await Task.Delay(30, _stop.Token);
+                long now = Stopwatch.GetTimestamp();
+                double dt = Math.Min(0.25, (now - last) / (double)Stopwatch.Frequency);
+                last = now;
+                if (_board.Status != GameStatus.Playing || _paused) continue;
+
+                _board.Advance(dt);
+                if (_board.Status == GameStatus.Lost) OnLost();
+                StateHasChanged();
+            }
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    private void Press((int Serial, int Col, PointerEventArgs Args) press)
+    {
+        if (_paused || press.Args.Button != 0) return;
+        _cursorRow = _cursorCol = -1;
+        _board.Reveal(press.Serial, press.Col);
+        if (_board.Status == GameStatus.Lost) OnLost();
+    }
+
+    private void OnLost()
+    {
+        if (_recorded) return;
+        _recorded = true;
+        long ms = (long)(_board.Elapsed * 1000);
+        int rows = _board.RowsCleared;
+        bool newBest = Save.RecordEndlessRun(ms, rows);
+        Session.Persist();
+
+        string why = _board.LossReason == LossReason.Mine ? "You hit a mine!" : "The rows reached the bottom!";
+        ShowMessage("Game Over", $"{why}\n\nYou lasted {Leaderboard.FormatDuration(ms)} and cleared {rows} row{(rows == 1 ? "" : "s")}." +
+                                 (newBest ? "\nThat is your longest run yet!" : ""));
+    }
+
+    /// <summary>Records a run that is being abandoned (new run, leaving). Returns true if it was a new longest run.</summary>
+    private bool RecordRunSoFar()
+    {
+        if (_recorded || _board.Status != GameStatus.Playing) return false;
+        _recorded = true;
+        bool best = Save.RecordEndlessRun((long)(_board.Elapsed * 1000), _board.RowsCleared);
+        Session.Persist();
+        return best;
+    }
+
+    private void NewGame()
+    {
+        if (RecordRunSoFar())
+            ShowMessage("Best Run", $"The run you left lasted {Leaderboard.FormatDuration(Save.EndlessBestMs)} - your longest yet!");
+        _board = new EndlessBoard();
+        _recorded = _paused = false;
+        _cursorRow = _cursorCol = -1;
+    }
+
+    private void TogglePause()
+    {
+        if (_board.Status != GameStatus.Playing) return;
+        _paused = !_paused;
+    }
+
+    private void ShowMessage(string title, string message)
+    {
+        _messageTitle = title;
+        _message = message;
+    }
+
+    // Dialogs pause a run in progress, as switching windows does.
+    private void ShowBestRun()
+    {
+        if (_board.Status == GameStatus.Playing) _paused = true;
+        ShowMessage("Best Run", Save.EndlessBestMs > 0
+            ? $"Longest run: {Leaderboard.FormatDuration(Save.EndlessBestMs)}\nMost rows cleared: {Save.EndlessBestRows}"
+            : "No runs yet.");
+    }
+
+    private void ShowControls()
+    {
+        if (_board.Status == GameStatus.Playing) _paused = true;
+        _showControls = true;
+    }
+
+    // Record before switching screens: the start screen reads the scores as soon as it appears.
+    private void ToMenu()
+    {
+        RecordRunSoFar();
+        Session.ToMenu();
+    }
+
+    /// <summary>The tab is closing or being thrown away: components are not disposed then, so count the run now.</summary>
+    [JSInvokable]
+    public void OnPageHide() => RecordRunSoFar();
+
+    [JSInvokable]
+    public void OnFocusLost()
+    {
+        if (_board.Status != GameStatus.Playing || _paused) return;
+        _paused = true;
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void OnKey(string key)
+    {
+        switch (key)
+        {
+            case "F1": ShowControls(); break;
+            case "F2": NewGame(); break;
+            case "p" or "Escape": TogglePause(); break;
+            default: MoveOrReveal(key); break;
+        }
+        StateHasChanged();
+    }
+
+    // Arrows/WASD move a cursor that rides with its row; Space/Enter reveal under it.
+    private void MoveOrReveal(string key)
+    {
+        if (_paused) return;
+        bool reveal = key is " " or "Enter";
+        int dx = key switch { "ArrowLeft" or "a" => -1, "ArrowRight" or "d" => 1, _ => 0 };
+        int dy = key switch { "ArrowUp" or "w" => 1, "ArrowDown" or "s" => -1, _ => 0 }; // up is toward newer rows
+        if (!reveal && dx == 0 && dy == 0) return;
+
+        var rows = _board.VisibleRows.ToList();
+        if (rows.Count == 0) return;
+
+        if (!_board.IsVisibleRow(_cursorRow))
+        {
+            // First use, or the cursor's row was cleared: go to the nearest row still on the field.
+            int target = _cursorRow < 0 ? rows[rows.Count / 2] : _cursorRow;
+            _cursorRow = rows.OrderBy(s => Math.Abs(s - target)).First();
+            if (_cursorCol < 0) _cursorCol = EndlessBoard.Columns / 2;
+        }
+        else if (dy != 0)
+        {
+            int index = rows.IndexOf(_cursorRow) + dy;
+            if (index >= 0 && index < rows.Count) _cursorRow = rows[index];
+        }
+        _cursorCol = Math.Clamp(_cursorCol + dx, 0, EndlessBoard.Columns - 1);
+
+        if (reveal)
+        {
+            _board.Reveal(_cursorRow, _cursorCol);
+            if (_board.Status == GameStatus.Lost) OnLost();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _stop.Cancel();
+        RecordRunSoFar(); // leaving mid-run still counts the run so far
+        try
+        {
+            await JS.InvokeVoidAsync("ms2.keys.stop", _keysId);
+            await JS.InvokeVoidAsync("ms2.focus.stop", _focusId);
+        }
+        catch (JSDisconnectedException) { }
+        _self?.Dispose();
+    }
+}

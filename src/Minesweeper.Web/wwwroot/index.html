@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Minesweeper 2.0: classic, hex, a 20-level Hex Challenge and Endless Mode." />
+    <title>Minesweeper 2.0</title>
+    <!-- Change this to the site's folder when hosting below the domain root (for example "/Minesweeper-2.0/"). -->
+    <base href="/" />
+    <link rel="icon" type="image/png" href="icon-192.png" />
+    <link rel="stylesheet" href="css/app.css" />
+</head>
+
+<body>
+    <div id="app">
+        <div class="loading">
+            <div class="loading-title">MINESWEEPER 2.0</div>
+            <div class="loading-text">Loading...</div>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui">
+        Something went wrong and the game stopped. Your progress up to the last save is safe.
+        <a href="" class="reload">Reload</a>
+        <a class="dismiss">🗙</a>
+    </div>
+    <noscript>Minesweeper 2.0 needs JavaScript and WebAssembly to run.</noscript>
+    <script src="js/ms2.js"></script>
+    <script src="_framework/blazor.webassembly.js"></script>
+</body>
+
+</html>

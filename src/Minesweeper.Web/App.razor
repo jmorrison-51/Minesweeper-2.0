@@ -1,0 +1,64 @@
+@implements IDisposable
+@inject GameSession Session
+
+@* One page with four screens, like the desktop's windows. No routing, so it works from any folder on a static host. *@
+
+@if (!Session.StorageAvailable)
+{
+    <div class="banner">This browser is blocking storage, so players and scores will be lost when the page closes.</div>
+}
+@if (Session.SaveError != null && !Session.SaveWarningDismissed)
+{
+    <div class="banner">
+        Your progress could not be saved: @Session.SaveError The game will keep trying each time it saves.
+        <button class="link" @onclick="() => Session.SaveWarningDismissed = true">Dismiss</button>
+    </div>
+}
+
+<ErrorBoundary @ref="_errors">
+    <ChildContent>
+        @switch (Session.Screen)
+        {
+            case Screen.Profiles:
+                <ProfilesScreen />
+                break;
+            case Screen.Start:
+                <StartScreen />
+                break;
+            case Screen.Board:
+                <BoardScreen @key="Session.Mode" Mode="Session.Mode" />
+                break;
+            case Screen.Endless:
+                <EndlessScreen />
+                break;
+        }
+    </ChildContent>
+    <ErrorContent Context="error">
+        <div class="screen center">
+            <div class="panel error-panel">
+                <h2>Something went wrong, sorry.</h2>
+                <p>Your progress up to the last save is safe.</p>
+                <p class="detail">@error.Message</p>
+                <button class="mode-button small" @onclick="Recover">Back to the main menu</button>
+            </div>
+        </div>
+    </ErrorContent>
+</ErrorBoundary>
+
+@code {
+    private ErrorBoundary? _errors;
+
+    protected override void OnInitialized() => Session.Changed += OnChanged;
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    private void Recover()
+    {
+        Session.Persist();
+        _errors?.Recover();
+        if (Session.CurrentProfile.Length > 0) Session.ToMenu();
+        else Session.SwitchPlayer();
+    }
+
+    public void Dispose() => Session.Changed -= OnChanged;
+}

@@ -1,0 +1,156 @@
+@* "Who's playing?": pick, add or delete a player. The name "admin" asks for the test password instead. *@
+@inject GameSession Session
+
+<PageTitle>Minesweeper 2.0 - Players</PageTitle>
+
+<div class="screen center">
+    <div class="panel narrow">
+        <h1>WHO'S PLAYING?</h1>
+        <p class="hint">
+            @(_players.Count == 0
+                ? "Create a player to get started. Each player has their own scores."
+                : "Pick your name, or add a new player. Each player has their own scores.")
+        </p>
+        <div class="player-list" role="listbox" aria-label="Players">
+            @foreach (var name in _players)
+            {
+                <button class="player @(name == _selected ? "selected" : "")" role="option" aria-selected="@(name == _selected)"
+                        @onclick="() => _selected = name" @ondblclick="() => Play(name)">@name</button>
+            }
+        </div>
+        <div class="button-grid">
+            <button class="mode-button small" disabled="@(_selected == null)" @onclick="() => Play(_selected)">Play</button>
+            <button class="mode-button small" @onclick="ShowNew">New Player...</button>
+            <button class="mode-button small" disabled="@(_selected == null)" @onclick="() => _confirmDelete = true">Delete</button>
+        </div>
+        <p class="note">Players and scores are kept in this browser only.</p>
+    </div>
+</div>
+
+@if (_showNew)
+{
+    <Dialog Title="New Player" OnDismiss="() => _showNew = false">
+        <ChildContent>
+            <form class="form-grid" id="new-player" @onsubmit="Create" novalidate>
+                <label for="player-name">Name:</label>
+                <input id="player-name" @ref="_nameInput" maxlength="@ProfileStore.MaxNameLength" autocomplete="off"
+                       @bind="_name" @bind:event="oninput" @bind:after="ClearError" />
+                @if (AdminAccess.IsAdminName(_name))
+                {
+                    <label for="admin-password">Password:</label>
+                    <input id="admin-password" type="password" @bind="_password" @bind:event="oninput" />
+                }
+                <button type="submit" class="offscreen" tabindex="-1">OK</button>
+            </form>
+            @if (_error.Length > 0)
+            {
+                <p class="error">@_error</p>
+            }
+        </ChildContent>
+        <Buttons>
+            <button class="button" @onclick="Create">OK</button>
+            <button class="button" @onclick="() => _showNew = false">Cancel</button>
+        </Buttons>
+    </Dialog>
+}
+
+@if (_confirmDelete && _selected != null)
+{
+    <Dialog Title="Delete Player">
+        <ChildContent><p>Delete @_selected and all of their scores and progress?<br /><br />This cannot be undone.</p></ChildContent>
+        <Buttons>
+            <button class="button" @onclick="Delete">Yes</button>
+            <button class="button" @onclick="() => _confirmDelete = false">No</button>
+        </Buttons>
+    </Dialog>
+}
+
+@code {
+    private IReadOnlyList<string> _players = [];
+    private string? _selected;
+    private bool _showNew, _confirmDelete;
+    private string _name = "", _password = "", _error = "";
+
+    private ElementReference _nameInput;
+    private bool _focusName;
+
+    // Put the cursor in the name box when the dialog opens.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusName || !_showNew) return;
+        _focusName = false;
+        await _nameInput.FocusAsync();
+    }
+
+    protected override void OnInitialized()
+    {
+        Reload(Session.Profiles.LastProfile);
+        // A first visit has nobody yet, so go straight to creating a player.
+        if (_players.Count == 0) ShowNew();
+    }
+
+    private void ClearError() => _error = "";
+
+    private void Reload(string? select)
+    {
+        _players = Session.Profiles.List();
+        _selected = select != null && _players.Contains(select) ? select : _players.FirstOrDefault();
+    }
+
+    private void Play(string? name)
+    {
+        if (name != null) Session.SignIn(name, isAdmin: false);
+    }
+
+    private void ShowNew()
+    {
+        _name = _password = _error = "";
+        _showNew = true;
+        _focusName = true;
+    }
+
+    private void Create()
+    {
+        if (AdminAccess.IsAdminName(_name))
+        {
+            if (!AdminAccess.PasswordMatches(_password))
+            {
+                _error = "Incorrect password.";
+                return;
+            }
+            _showNew = false;
+            Session.SignIn(AdminAccess.UserName, isAdmin: true);
+            return;
+        }
+
+        if (!ProfileStore.IsValidName(_name, out string error))
+        {
+            _error = error;
+            return;
+        }
+        if (Session.Profiles.Find(_name) != null)
+        {
+            _error = "There is already a player with that name.";
+            return;
+        }
+
+        try
+        {
+            string name = Session.Profiles.Create(_name);
+            _showNew = false;
+            Session.SignIn(name, isAdmin: false);
+        }
+        catch (IOException ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private void Delete()
+    {
+        _confirmDelete = false;
+        if (_selected == null) return;
+        Session.Profiles.Delete(_selected);
+        Reload(null);
+    }
+}

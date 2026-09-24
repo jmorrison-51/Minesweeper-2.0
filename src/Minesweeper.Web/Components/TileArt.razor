@@ -1,0 +1,134 @@
+@* Drawing for one tile in SVG, shared by the board and Endless Mode. Same look as the desktop's GDI+ tiles.
+   Units are pixels at the chosen tile size; the project uses invariant globalization so numbers print with dots. *@
+
+@code {
+    public static readonly string[] NumberColors =
+        ["", "#0000ff", "#008000", "#ff0000", "#000080", "#800000", "#008080", "#000000", "#808080"];
+
+    private const string Face = "#c0c0c0", Light = "#ffffff", Shadow = "#808080";
+
+    /// <summary>What to draw on a tile.</summary>
+    public readonly record struct Look(bool Raised, bool Exploded, TileMark Mark, int Number = 0);
+
+    public enum TileMark { None, Number, Mystery, Mine, Flag, WrongFlag }
+
+    public static string HexPoints(double cx, double cy, double radius)
+    {
+        var points = new string[6];
+        for (int i = 0; i < 6; i++)
+        {
+            double a = Math.PI / 180 * (60 * i - 90);
+            points[i] = $"{cx + radius * Math.Cos(a):0.##},{cy + radius * Math.Sin(a):0.##}";
+        }
+        return string.Join(" ", points);
+    }
+
+    public static RenderFragment Hex(double cx, double cy, double radius, int size, Look look) => __builder =>
+    {
+        <polygon points="@HexPoints(cx, cy, radius)" fill="@(look.Exploded && !look.Raised ? "red" : Face)" />
+        if (look.Raised)
+        {
+            // Edges 0, 4 and 5 face up/left and are lit; 1, 2 and 3 are in shadow.
+            double bevel = Math.Max(2, size / 9.0);
+            double r = radius - bevel / 2;
+            for (int i = 0; i < 6; i++)
+            {
+                double a1 = Math.PI / 180 * (60 * i - 90), a2 = Math.PI / 180 * (60 * (i + 1) - 90);
+                <line x1="@(cx + r * Math.Cos(a1))" y1="@(cy + r * Math.Sin(a1))" x2="@(cx + r * Math.Cos(a2))" y2="@(cy + r * Math.Sin(a2))"
+                      stroke="@(i is 0 or 4 or 5 ? Light : Shadow)" stroke-width="@bevel" stroke-linecap="round" />
+            }
+        }
+        else
+        {
+            <polygon points="@HexPoints(cx, cy, radius - 0.5)" fill="none" stroke="@Shadow" stroke-width="1" />
+        }
+        @Mark(cx, cy, size, look)
+    };
+
+    public static RenderFragment Square(double x, double y, int size, Look look) => __builder =>
+    {
+        double cx = x + size / 2.0, cy = y + size / 2.0;
+        if (look.Raised)
+        {
+            double b = Math.Max(2, size / 10.0);
+            <rect x="@x" y="@y" width="@size" height="@size" fill="@Face" />
+            <polygon points="@($"{x},{y} {x + size},{y} {x + size - b},{y + b} {x + b},{y + b} {x + b},{y + size - b} {x},{y + size}")" fill="@Light" />
+            <polygon points="@($"{x + size},{y + size} {x},{y + size} {x + b},{y + size - b} {x + size - b},{y + size - b} {x + size - b},{y + b} {x + size},{y}")" fill="@Shadow" />
+        }
+        else
+        {
+            <rect x="@(x + 0.5)" y="@(y + 0.5)" width="@(size - 1)" height="@(size - 1)" fill="@(look.Exploded ? "red" : Face)" stroke="@Shadow" stroke-width="1" />
+        }
+        @Mark(cx, cy, size, look)
+    };
+
+    private static RenderFragment Mark(double cx, double cy, int size, Look look) => __builder =>
+    {
+        switch (look.Mark)
+        {
+            case TileMark.Number:
+                @SvgText(cx, cy, size, NumberColors[look.Number], look.Number.ToString(), upsideDown: false)
+                break;
+            case TileMark.Mystery:
+                @SvgText(cx, cy, size, "#800080", "?", upsideDown: true)
+                break;
+            case TileMark.Mine:
+                @Mine(cx, cy, size)
+                break;
+            case TileMark.WrongFlag:
+                @Mine(cx, cy, size)
+                double d = size / 2.0 - 4, w = Math.Max(2, size / 10.0);
+                <line x1="@(cx - d)" y1="@(cy - d)" x2="@(cx + d)" y2="@(cy + d)" stroke="red" stroke-width="@w" />
+                <line x1="@(cx - d)" y1="@(cy + d)" x2="@(cx + d)" y2="@(cy - d)" stroke="red" stroke-width="@w" />
+                break;
+            case TileMark.Flag:
+                double u = size / 24.0, top = cy - size / 2.0, bottom = cy + size / 2.0;
+                <rect x="@(cx - 6 * u)" y="@(bottom - 6 * u)" width="@(12 * u)" height="@(2.5 * u)" fill="#000" />
+                <rect x="@(cx - 3.5 * u)" y="@(bottom - 8.5 * u)" width="@(7 * u)" height="@(2.5 * u)" fill="#000" />
+                <rect x="@(cx - 0.5 * u)" y="@(top + 5 * u)" width="@(2 * u)" height="@(size - 12 * u)" fill="#000" />
+                <polygon points="@($"{cx + 1.5 * u:0.##},{top + 4 * u:0.##} {cx + 1.5 * u:0.##},{top + 12 * u:0.##} {cx - 6 * u:0.##},{top + 8 * u:0.##}")" fill="red" />
+                break;
+        }
+    };
+
+    // Razor reserves <text> in code, so the SVG text element is built by hand.
+    private static RenderFragment SvgText(double cx, double cy, int size, string color, string content, bool upsideDown) => builder =>
+    {
+        builder.OpenElement(0, "text");
+        builder.AddAttribute(1, "x", cx);
+        builder.AddAttribute(2, "y", cy);
+        builder.AddAttribute(3, "class", "tile-number");
+        builder.AddAttribute(4, "font-size", size * 0.58);
+        builder.AddAttribute(5, "fill", color);
+        if (upsideDown) builder.AddAttribute(6, "transform", $"rotate(180 {cx} {cy})");
+        builder.AddContent(7, content);
+        builder.CloseElement();
+    };
+
+    private static RenderFragment Mine(double cx, double cy, int size) => __builder =>
+    {
+        double radius = size * 0.26, reach = radius * 1.6, diag = reach * 0.72, spike = Math.Max(1.5, size / 12.0);
+        <g stroke="#000" stroke-width="@spike">
+            <line x1="@(cx - reach)" y1="@cy" x2="@(cx + reach)" y2="@cy" />
+            <line x1="@cx" y1="@(cy - reach)" x2="@cx" y2="@(cy + reach)" />
+            <line x1="@(cx - diag)" y1="@(cy - diag)" x2="@(cx + diag)" y2="@(cy + diag)" />
+            <line x1="@(cx - diag)" y1="@(cy + diag)" x2="@(cx + diag)" y2="@(cy - diag)" />
+        </g>
+        <circle cx="@cx" cy="@cy" r="@radius" fill="#000" />
+        <rect x="@(cx - radius * 0.5)" y="@(cy - radius * 0.5)" width="@(radius * 0.4)" height="@(radius * 0.4)" fill="#fff" />
+    };
+
+    public const string CursorColor = "#005aff";
+
+    public static RenderFragment HexCursor(double cx, double cy, double radius, int size) => __builder =>
+    {
+        double w = Math.Max(2, size / 10.0);
+        <polygon points="@HexPoints(cx, cy, radius - w / 2)" fill="none" stroke="@CursorColor" stroke-width="@w" pointer-events="none" />
+    };
+
+    public static RenderFragment SquareCursor(double x, double y, int size) => __builder =>
+    {
+        double w = Math.Max(2, size / 10.0);
+        <rect x="@(x + w / 2)" y="@(y + w / 2)" width="@(size - w)" height="@(size - w)" fill="none" stroke="@CursorColor" stroke-width="@w" pointer-events="none" />
+    };
+}
