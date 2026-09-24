@@ -5,11 +5,12 @@ namespace Minesweeper.Core;
 public sealed class SaveData
 {
     public string LastDifficulty { get; set; } = "Beginner";
+    public string LastHexDifficulty { get; set; } = "Beginner";
     public int CustomColumns { get; set; } = 16;
     public int CustomRows { get; set; } = 16;
     public int CustomMines { get; set; } = 40;
 
-    // Best win time in milliseconds, keyed by difficulty name.
+    // Best win time in milliseconds, keyed by Difficulty.Key ("Beginner", "Hex Beginner", ...).
     public Dictionary<string, long> BestTimesMs { get; set; } = new();
 
     public bool TrySetBestTime(string difficultyName, long elapsedMs)

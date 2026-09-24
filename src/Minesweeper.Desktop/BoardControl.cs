@@ -41,7 +41,7 @@ public sealed class BoardControl : Control
         {
             _board = value;
             ResetInput();
-            if (_board != null) Size = new Size(_board.Columns * CellSize, _board.Rows * CellSize);
+            if (_board != null) Size = BoardSize();
             Invalidate();
         }
     }
@@ -54,9 +54,26 @@ public sealed class BoardControl : Control
     public void ApplyScale(int cellSize)
     {
         CellSize = cellSize;
-        if (_board != null) Size = new Size(_board.Columns * CellSize, _board.Rows * CellSize);
+        if (_board != null) Size = BoardSize();
         Invalidate();
     }
+
+    private bool IsHex => _board?.Difficulty.Shape == BoardShape.Hex;
+
+    // Hex cells are pointy-top: HexWidth is flat-to-flat, HexRadius is center-to-corner.
+    private float HexWidth => CellSize * 1.1f;
+    private float HexRadius => HexWidth / MathF.Sqrt(3f);
+
+    private Size BoardSize()
+    {
+        if (!IsHex) return new Size(_board!.Columns * CellSize, _board.Rows * CellSize);
+        int width = (int)MathF.Ceiling(HexWidth * (_board!.Columns + 0.5f));
+        int height = (int)MathF.Ceiling(HexRadius * (1.5f * (_board.Rows - 1) + 2f));
+        return new Size(width, height);
+    }
+
+    private PointF HexCenter(int x, int y) =>
+        new(HexWidth * (x + 0.5f + ((y & 1) == 1 ? 0.5f : 0f)), HexRadius * (1f + 1.5f * y));
 
     private void ResetInput()
     {
@@ -66,9 +83,32 @@ public sealed class BoardControl : Control
 
     private bool CellAt(Point p, out int x, out int y)
     {
-        x = p.X / CellSize;
-        y = p.Y / CellSize;
-        return p.X >= 0 && p.Y >= 0 && _board != null && _board.InBounds(x, y);
+        x = y = -1;
+        if (_board == null || p.X < 0 || p.Y < 0) return false;
+
+        if (!IsHex)
+        {
+            x = p.X / CellSize;
+            y = p.Y / CellSize;
+            return _board.InBounds(x, y);
+        }
+
+        // Nearest hex center among the candidates around the pointer; on a regular hex lattice
+        // the nearest center is the hex containing the point.
+        int row = (int)(p.Y / (1.5f * HexRadius));
+        int col = (int)(p.X / HexWidth);
+        float best = float.MaxValue;
+        for (int cy = row - 1; cy <= row + 1; cy++)
+        {
+            for (int cx = col - 1; cx <= col + 1; cx++)
+            {
+                if (!_board.InBounds(cx, cy)) continue;
+                var c = HexCenter(cx, cy);
+                float d = (c.X - p.X) * (c.X - p.X) + (c.Y - p.Y) * (c.Y - p.Y);
+                if (d < best) { best = d; x = cx; y = cy; }
+            }
+        }
+        return x >= 0 && best <= HexRadius * HexRadius;
     }
 
     private void UpdateHover(Point p)
@@ -168,30 +208,46 @@ public sealed class BoardControl : Control
         using var font = new Font("Segoe UI", CellSize * 0.58f, FontStyle.Bold, GraphicsUnit.Pixel);
         var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
 
+        // While chording, the hovered cell and its neighbors all show as pressed.
+        HashSet<(int X, int Y)>? chordArea = null;
+        if (pressing && _chording && _hoverX >= 0)
+            chordArea = new HashSet<(int X, int Y)>(_board.Neighbors(_hoverX, _hoverY)) { (_hoverX, _hoverY) };
+
         for (int y = 0; y < _board.Rows; y++)
         {
             for (int x = 0; x < _board.Columns; x++)
             {
-                var rect = new Rectangle(x * CellSize, y * CellSize, CellSize, CellSize);
-                if (!rect.IntersectsWith(e.ClipRectangle)) continue;
-                DrawCell(g, rect, _board[x, y], IsPressed(x, y, pressing), font, format);
+                Rectangle rect;
+                PointF center = default;
+                if (IsHex)
+                {
+                    center = HexCenter(x, y);
+                    rect = new Rectangle((int)MathF.Round(center.X - CellSize / 2f), (int)MathF.Round(center.Y - CellSize / 2f), CellSize, CellSize);
+                    if (!Rectangle.Inflate(rect, CellSize / 4, CellSize / 4).IntersectsWith(e.ClipRectangle)) continue;
+                }
+                else
+                {
+                    rect = new Rectangle(x * CellSize, y * CellSize, CellSize, CellSize);
+                    if (!rect.IntersectsWith(e.ClipRectangle)) continue;
+                }
+
+                bool isPressed = pressing && _hoverX >= 0 &&
+                    (chordArea != null ? chordArea.Contains((x, y)) : _leftDown && x == _hoverX && y == _hoverY);
+                DrawCell(g, rect, center, _board[x, y], isPressed, font, format);
             }
         }
     }
 
-    private bool IsPressed(int x, int y, bool pressing)
-    {
-        if (!pressing || _hoverX < 0) return false;
-        if (_chording) return Math.Abs(x - _hoverX) <= 1 && Math.Abs(y - _hoverY) <= 1;
-        return _leftDown && x == _hoverX && y == _hoverY;
-    }
-
-    private void DrawCell(Graphics g, Rectangle r, Cell cell, bool pressed, Font font, StringFormat format)
+    private void DrawCell(Graphics g, Rectangle r, PointF center, Cell cell, bool pressed, Font font, StringFormat format)
     {
         bool lost = _board!.Status == GameStatus.Lost;
         bool raised = cell.State != CellState.Revealed && !pressed || cell.State == CellState.Flagged;
 
-        if (raised)
+        if (IsHex)
+        {
+            DrawHexBackground(g, center, raised, cell.Exploded);
+        }
+        else if (raised)
         {
             using (var b = new SolidBrush(Face)) g.FillRectangle(b, r);
             int bevel = Math.Max(2, CellSize / 10);
@@ -235,6 +291,40 @@ public sealed class BoardControl : Control
                 g.DrawString(cell.AdjacentMines.ToString(), font, brush, r, format);
             }
         }
+    }
+
+    private static PointF[] HexCorners(PointF c, float radius)
+    {
+        var pts = new PointF[6];
+        for (int i = 0; i < 6; i++)
+        {
+            float a = MathF.PI / 180f * (60 * i - 90);
+            pts[i] = new PointF(c.X + radius * MathF.Cos(a), c.Y + radius * MathF.Sin(a));
+        }
+        return pts;
+    }
+
+    private void DrawHexBackground(Graphics g, PointF center, bool raised, bool exploded)
+    {
+        float radius = HexRadius;
+        using (var b = new SolidBrush(exploded && !raised ? Color.Red : Face))
+            g.FillPolygon(b, HexCorners(center, radius));
+
+        if (!raised)
+        {
+            using var edge = new Pen(Shadow);
+            g.DrawPolygon(edge, HexCorners(center, radius - 0.5f));
+            return;
+        }
+
+        // Corners run clockwise from the top and edge i joins corner i to i+1. Edges 0, 4 and 5 face
+        // up/left and are lit; edges 1, 2 and 3 face down/right and are in shadow.
+        float bevel = Math.Max(2f, CellSize / 9f);
+        var pts = HexCorners(center, radius - bevel / 2f);
+        using var light = new Pen(Light, bevel) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        using var dark = new Pen(Shadow, bevel) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        for (int i = 0; i < 6; i++)
+            g.DrawLine(i is 0 or 4 or 5 ? light : dark, pts[i], pts[(i + 1) % 6]);
     }
 
     private void DrawFlag(Graphics g, Rectangle r)

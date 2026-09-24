@@ -38,7 +38,7 @@ public sealed class StartForm : Form
         _buttons =
         [
             Create("Minesweeper Original", "The classic square grid. Beginner, Intermediate, Expert or Custom.", GameMode.Classic),
-            Create("Hex Minesweeper", "Hexagonal tiles at a fixed difficulty. Play as long as you like.", GameMode.Hex),
+            Create("Hex Minesweeper", "Hexagonal tiles, six neighbors each. Beginner, Intermediate, Expert or Custom.", GameMode.Hex),
             Create("Hex Challenge", "20 levels of rising difficulty with mystery tiles and a shrinking flag budget.", GameMode.HexChallenge),
         ];
         _exit = new ModeButton("Exit", null);

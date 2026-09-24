@@ -36,8 +36,24 @@ public sealed class Board
 
     public bool InBounds(int x, int y) => x >= 0 && y >= 0 && x < Columns && y < Rows;
 
+    // Square boards are 8-way. Hex boards use "odd-r" offset rows (odd rows shifted half a cell
+    // right, pointy-top hexes) and have 6 neighbors.
     public IEnumerable<(int X, int Y)> Neighbors(int x, int y)
     {
+        if (Difficulty.Shape == BoardShape.Hex)
+        {
+            int shift = (y & 1) == 0 ? -1 : 0;
+            (int X, int Y)[] hex =
+            [
+                (x - 1, y), (x + 1, y),
+                (x + shift, y - 1), (x + shift + 1, y - 1),
+                (x + shift, y + 1), (x + shift + 1, y + 1),
+            ];
+            foreach (var n in hex)
+                if (InBounds(n.X, n.Y)) yield return n;
+            yield break;
+        }
+
         for (int dy = -1; dy <= 1; dy++)
         {
             for (int dx = -1; dx <= 1; dx++)
@@ -71,6 +87,7 @@ public sealed class Board
         switch (cell.State)
         {
             case CellState.Hidden:
+                if (FlagCount >= MineCount) return;
                 cell.State = CellState.Flagged;
                 FlagCount++;
                 break;

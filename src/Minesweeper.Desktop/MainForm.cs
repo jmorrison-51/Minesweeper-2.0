@@ -27,9 +27,12 @@ public sealed class MainForm : Form
     /// <summary>True when the form was closed to go back to the start screen rather than to quit.</summary>
     public bool ReturnToMenu { get; private set; }
 
-    public MainForm()
+    private readonly BoardShape _shape;
+
+    public MainForm(BoardShape shape = BoardShape.Square)
     {
-        Text = "Minesweeper";
+        _shape = shape;
+        Text = shape == BoardShape.Hex ? "Hex Minesweeper" : "Minesweeper";
         BackColor = Gray;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -37,13 +40,14 @@ public sealed class MainForm : Form
         Icon = SystemIcons.Application;
 
         _save = SaveData.Load(_savePath);
-        _difficulty = _save.LastDifficulty switch
+        _difficulty = (_shape == BoardShape.Hex ? _save.LastHexDifficulty : _save.LastDifficulty) switch
         {
             "Intermediate" => Difficulty.Intermediate,
             "Expert" => Difficulty.Expert,
             "Custom" => Difficulty.Custom(_save.CustomColumns, _save.CustomRows, _save.CustomMines),
             _ => Difficulty.Beginner,
         };
+        _difficulty = _difficulty.WithShape(_shape);
 
         BuildMenu();
         Controls.Add(_menu);
@@ -71,7 +75,7 @@ public sealed class MainForm : Form
         game.DropDownItems.Add(new ToolStripSeparator());
         foreach (var d in new[] { Difficulty.Beginner, Difficulty.Intermediate, Difficulty.Expert })
         {
-            var item = MenuItem($"&{d.Name}", Keys.None, () => SetDifficulty(d));
+            var item = MenuItem($"&{d.Name}", Keys.None, () => SetDifficulty(d.WithShape(_shape)));
             _difficultyItems[d.Name] = item;
             game.DropDownItems.Add(item);
         }
@@ -112,13 +116,13 @@ public sealed class MainForm : Form
         _save.CustomColumns = result.Columns;
         _save.CustomRows = result.Rows;
         _save.CustomMines = result.Mines;
-        SetDifficulty(result);
+        SetDifficulty(result.WithShape(_shape));
     }
 
     private void ShowBestTimes()
     {
         string Line(Difficulty d) =>
-            _save.BestTimesMs.TryGetValue(d.Name, out long ms) ? $"{ms / 1000.0:0.00} seconds" : "--";
+            _save.BestTimesMs.TryGetValue(d.WithShape(_shape).Key, out long ms) ? $"{ms / 1000.0:0.00} seconds" : "--";
 
         MessageBox.Show(this,
             $"Beginner:\t\t{Line(Difficulty.Beginner)}\n" +
@@ -137,7 +141,8 @@ public sealed class MainForm : Form
         _boardControl.ApplyScale(LogicalToDeviceUnits(24));
         _boardControl.Board = _board;
 
-        _save.LastDifficulty = _difficulty.Name;
+        if (_shape == BoardShape.Hex) _save.LastHexDifficulty = _difficulty.Name;
+        else _save.LastDifficulty = _difficulty.Name;
         foreach (var (name, item) in _difficultyItems) item.Checked = name == _difficulty.Name;
 
         LayoutControls();
@@ -208,7 +213,7 @@ public sealed class MainForm : Form
         _bestTimeRecorded = true;
 
         long ms = _stopwatch.ElapsedMilliseconds;
-        if (_save.TrySetBestTime(_difficulty.Name, ms))
+        if (_save.TrySetBestTime(_difficulty.Key, ms))
         {
             _save.Save(_savePath);
             BeginInvoke(() => MessageBox.Show(this,
