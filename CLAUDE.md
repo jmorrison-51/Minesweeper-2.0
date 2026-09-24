@@ -21,7 +21,7 @@ dotnet run --project src/Minesweeper.Web --urls http://localhost:5210   # web de
 dotnet publish src/Minesweeper.Web -c Release -o <folder>               # static site in <folder>/wwwroot
 ```
 
-`.claude/launch.json` has a `web` entry for the browser preview on port 5211, because the owner often runs their own copy on 5210. Test a web release build too: it is what a host serves. Serve `<folder>/wwwroot` with any plain static file server (`.wasm` as `application/wasm`, `.dat`/`.blat` as octet-stream). To host below a domain root (GitHub Pages serves `/Minesweeper-2.0/`), change `<base href="/">` in `wwwroot/index.html`.
+`.claude/launch.json` has a `web` entry for the browser preview on port 5211, because the owner often runs their own copy on 5210. Test a web release build too: it is what a host serves. Serve `<folder>/wwwroot` with any plain static file server (`.wasm` as `application/wasm`, `.dat`/`.blat` as octet-stream). To host below a domain root (GitHub Pages serves `/Minesweeper-2.0/`), change `<base href="/">` in `wwwroot/index.html`. `.github/workflows/pages.yml` does this for GitHub Pages: on every push to `main` it runs the tests, publishes the web project, rewrites the base href to `/<repo name>/`, adds `.nojekyll` and deploys (Pages source must be "GitHub Actions"; free accounts need a public repo).
 
 No linter is configured. The owner plays the published `dist/Minesweeper.Desktop.exe` (git-ignored), not `dotnet run`, so republish after any change they should see; it fails if an instance is running. The git remote `origin` is the private GitHub repo `jmorrison-51/Minesweeper-2.0` (branch `main`); the separate `jmorrison-51/Minesweeper` repo is the unrelated original game.
 
