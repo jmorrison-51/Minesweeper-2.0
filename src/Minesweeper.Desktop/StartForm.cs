@@ -25,12 +25,25 @@ public sealed class StartForm : Form
 
     private readonly ModeButton _switchPlayer = new("Switch Player", null);
 
+    // High scores beside each mode: classic, hex, challenge, endless.
+    private static readonly string[] ScoreDifficulties = { "Beginner", "Intermediate", "Expert" };
+    private static readonly Font ScoreFont = new("Segoe UI", 9f);
+    private static readonly Font ScoreBoldFont = new("Segoe UI", 9f, FontStyle.Bold);
+
+    private sealed record ScoreRow(string Left, string Right, bool Header = false, bool Mine = false, bool Empty = false);
+
+    private readonly ListBox[] _scoreLists;
+    private readonly ModeButton _scoreDifficultyButton = new("", "click to change");
+    private readonly IReadOnlyList<(string Name, SaveData Save)> _players;
+    private int _scoreDifficulty;
+
     public GameMode? Selected { get; private set; }
 
     /// <summary>True when the player asked to go back to the "Who's playing?" screen.</summary>
     public bool SwitchPlayer { get; private set; }
 
-    public StartForm()
+    /// <param name="players">Whose scores to list. Defaults to every saved player.</param>
+    public StartForm(IReadOnlyList<(string Name, SaveData Save)>? players = null)
     {
         Text = "Minesweeper 2.0";
         BackColor = Gray;
@@ -101,7 +114,80 @@ public sealed class StartForm : Form
         Controls.Add(_switchPlayer);
         Controls.Add(_exit);
 
+        // Scoreboards for every listed player (the admin login is never included).
+        _players = players ?? Program.Profiles.LoadAll();
+        _scoreLists = Enumerable.Range(0, 4).Select(_ => NewScoreList()).ToArray();
+        Controls.AddRange(_scoreLists);
+        _scoreDifficultyButton.Click += (_, _) =>
+        {
+            _scoreDifficulty = (_scoreDifficulty + 1) % ScoreDifficulties.Length;
+            RefreshScores();
+        };
+        Controls.Add(_scoreDifficultyButton);
+        RefreshScores();
+
         LayoutControls();
+    }
+
+    private ListBox NewScoreList()
+    {
+        var list = new ListBox
+        {
+            DrawMode = DrawMode.OwnerDrawFixed,
+            SelectionMode = SelectionMode.None,
+            IntegralHeight = false,
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = Color.White,
+            TabStop = false,
+            ItemHeight = LogicalToDeviceUnits(18),
+        };
+        list.DrawItem += DrawScoreRow;
+        return list;
+    }
+
+    private void RefreshScores()
+    {
+        string difficulty = ScoreDifficulties[_scoreDifficulty];
+        _scoreDifficultyButton.Title = $"Times: {difficulty}";
+
+        Fill(_scoreLists[0], $"Fastest - {difficulty}", Leaderboard.BestTimes(_players, difficulty));
+        Fill(_scoreLists[1], $"Fastest - {difficulty}", Leaderboard.BestTimes(_players, "Hex " + difficulty));
+        Fill(_scoreLists[2], "Furthest level", Leaderboard.Challenge(_players));
+        Fill(_scoreLists[3], "Longest run", Leaderboard.Endless(_players));
+    }
+
+    private void Fill(ListBox list, string header, IReadOnlyList<ScoreEntry> entries)
+    {
+        list.BeginUpdate();
+        list.Items.Clear();
+        list.Items.Add(new ScoreRow(header, "", Header: true));
+        if (entries.Count == 0) list.Items.Add(new ScoreRow("No scores yet", "", Empty: true));
+        foreach (var e in entries)
+        {
+            bool mine = !Program.IsAdmin && string.Equals(e.Player, Program.CurrentProfile, StringComparison.OrdinalIgnoreCase);
+            list.Items.Add(new ScoreRow($"{e.Rank}. {e.Player}", e.Value, Mine: mine));
+        }
+        list.EndUpdate();
+    }
+
+    private static void DrawScoreRow(object? sender, DrawItemEventArgs e)
+    {
+        if (sender is not ListBox list || e.Index < 0 || list.Items[e.Index] is not ScoreRow row) return;
+
+        var g = e.Graphics;
+        using (var back = new SolidBrush(row.Header ? Color.FromArgb(226, 226, 226) : Color.White))
+            g.FillRectangle(back, e.Bounds);
+
+        var font = row.Header || row.Mine ? ScoreBoldFont : ScoreFont;
+        Color color = row.Empty ? Color.Gray : row.Mine ? Color.FromArgb(0, 70, 170) : Color.Black;
+        var bounds = Rectangle.Inflate(e.Bounds, -4, 0);
+
+        int rightWidth = row.Right.Length == 0 ? 0 : TextRenderer.MeasureText(g, row.Right, font).Width + 6;
+        var left = new Rectangle(bounds.X, bounds.Y, bounds.Width - rightWidth, bounds.Height);
+        const TextFormatFlags flags = TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding;
+        TextRenderer.DrawText(g, row.Left, font, left, color, flags | TextFormatFlags.EndEllipsis);
+        if (rightWidth > 0)
+            TextRenderer.DrawText(g, row.Right, font, bounds, color, flags | TextFormatFlags.Right);
     }
 
     private ModeButton Create(string title, string description, GameMode mode)
@@ -129,41 +215,59 @@ public sealed class StartForm : Form
         int width = LogicalToDeviceUnits(420);
         int buttonHeight = LogicalToDeviceUnits(72);
         int gap = LogicalToDeviceUnits(12);
+        int scoreWidth = LogicalToDeviceUnits(260);
+        int scoreX = pad + width + gap;
+        int fullWidth = width + gap + scoreWidth;
 
         int y = pad;
-        _title.SetBounds(pad, y, width, LogicalToDeviceUnits(44));
+        _title.SetBounds(pad, y, fullWidth, LogicalToDeviceUnits(44));
         y += _title.Height;
-        _subtitle.SetBounds(pad, y, width, LogicalToDeviceUnits(28));
+        _subtitle.SetBounds(pad, y, fullWidth, LogicalToDeviceUnits(28));
         y += _subtitle.Height + gap;
 
-        foreach (var b in _buttons)
+        // Each mode has its scoreboard beside it, the same height as the button.
+        for (int i = 0; i < _buttons.Length; i++)
         {
-            b.SetBounds(pad, y, width, buttonHeight);
+            _buttons[i].SetBounds(pad, y, width, buttonHeight);
+            _scoreLists[i].SetBounds(scoreX, y, scoreWidth, buttonHeight);
             y += buttonHeight + gap;
         }
 
         _tileLabel.SetBounds(pad, y, width, LogicalToDeviceUnits(24));
+        int tileRowTop = y;
         y += _tileLabel.Height;
         int tileGap = LogicalToDeviceUnits(8);
         int tileWidth = (width - tileGap * (_tileButtons.Length - 1)) / _tileButtons.Length;
         for (int i = 0; i < _tileButtons.Length; i++)
             _tileButtons[i].SetBounds(pad + i * (tileWidth + tileGap), y, tileWidth, LogicalToDeviceUnits(36));
+        _scoreDifficultyButton.SetBounds(scoreX, tileRowTop, scoreWidth, y + LogicalToDeviceUnits(36) - tileRowTop);
         y += LogicalToDeviceUnits(36) + gap * 2;
 
         int half = (width - gap) / 2;
         _switchPlayer.SetBounds(pad, y, half, LogicalToDeviceUnits(40));
         _exit.SetBounds(pad + half + gap, y, half, LogicalToDeviceUnits(40));
 
-        ClientSize = new Size(width + 2 * pad, _exit.Bottom + pad);
+        ClientSize = new Size(fullWidth + 2 * pad, _exit.Bottom + pad);
     }
 }
 
 /// <summary>Raised bevel button with a bold title and an optional description line.</summary>
 public sealed class ModeButton : Control
 {
-    private readonly string _title;
+    private string _title;
     private readonly string? _description;
     private bool _hover;
+
+    public string Title
+    {
+        get => _title;
+        set
+        {
+            if (_title == value) return;
+            _title = value;
+            Invalidate();
+        }
+    }
     private bool _pressed;
     private bool _checked;
     private bool _locked;

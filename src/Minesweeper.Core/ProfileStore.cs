@@ -45,6 +45,10 @@ public sealed class ProfileStore
             .ToList();
     }
 
+    /// <summary>Every listed player with their save, for scoreboards. The admin login is not included.</summary>
+    public IReadOnlyList<(string Name, SaveData Save)> LoadAll() =>
+        List().Select(name => (name, SaveData.Load(PathFor(name)))).ToList();
+
     /// <summary>The stored spelling of a name (matching ignores case), or null if there is no such player.</summary>
     public string? Find(string name) =>
         List().FirstOrDefault(n => string.Equals(n, name.Trim(), StringComparison.OrdinalIgnoreCase));
