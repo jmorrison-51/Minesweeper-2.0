@@ -29,10 +29,14 @@ there is no online leaderboard and no account.
 
 ## Play
 
-- **Windows:** run `Minesweeper.Desktop.exe` (a single self-contained file; nothing to install). Your saves are in
-  `%AppData%\Minesweeper2`.
-- **Web:** open the site in any modern browser. Your saves live in that browser only, so use **Backup...** on the
-  "Who's playing?" screen to keep a copy, or to move your players to another browser.
+- **Web: [play it in your browser](https://jmorrison-51.github.io/Minesweeper-2.0/).** It works in any modern
+  browser. Your saves live in that browser only, so use **Backup...** on the "Who's playing?" screen to keep a copy,
+  or to move your players to another browser.
+- **Windows:** download `Minesweeper.Desktop.exe` from the
+  [latest release](https://github.com/jmorrison-51/Minesweeper-2.0/releases/latest) and run it (a single
+  self-contained file of about 70 MB; nothing to install). Your saves are in `%AppData%\Minesweeper2`. The file is
+  not code-signed, so Windows SmartScreen may say it "protected your PC": choose **More info**, then **Run anyway**.
+  You can also build it yourself, below.
 
 ## Build it yourself
 
