@@ -233,12 +233,12 @@ public sealed class BoardControl : Control
 
                 bool isPressed = pressing && _hoverX >= 0 &&
                     (chordArea != null ? chordArea.Contains((x, y)) : _leftDown && x == _hoverX && y == _hoverY);
-                DrawCell(g, rect, center, _board[x, y], isPressed, font, format);
+                DrawCell(g, rect, center, _board[x, y], isPressed, _board.IsNumberHidden(x, y), font, format);
             }
         }
     }
 
-    private void DrawCell(Graphics g, Rectangle r, PointF center, Cell cell, bool pressed, Font font, StringFormat format)
+    private void DrawCell(Graphics g, Rectangle r, PointF center, Cell cell, bool pressed, bool numberHidden, Font font, StringFormat format)
     {
         bool lost = _board!.Status == GameStatus.Lost;
         bool raised = cell.State != CellState.Revealed && !pressed || cell.State == CellState.Flagged;
@@ -285,12 +285,27 @@ public sealed class BoardControl : Control
         else if (cell.State == CellState.Revealed)
         {
             if (cell.IsMine) DrawMine(g, r);
+            else if (numberHidden)
+            {
+                DrawMystery(g, r, font, format);
+            }
             else if (cell.AdjacentMines > 0)
             {
                 using var brush = new SolidBrush(NumberColors[cell.AdjacentMines]);
                 g.DrawString(cell.AdjacentMines.ToString(), font, brush, r, format);
             }
         }
+    }
+
+    // A revealed cell whose number is still hidden shows an upside-down question mark.
+    private static void DrawMystery(Graphics g, Rectangle r, Font font, StringFormat format)
+    {
+        var state = g.Save();
+        g.TranslateTransform(r.X + r.Width / 2f, r.Y + r.Height / 2f);
+        g.RotateTransform(180);
+        using var brush = new SolidBrush(Color.FromArgb(128, 0, 128));
+        g.DrawString("?", font, brush, new RectangleF(-r.Width / 2f, -r.Height / 2f, r.Width, r.Height), format);
+        g.Restore(state);
     }
 
     private static PointF[] HexCorners(PointF c, float radius)

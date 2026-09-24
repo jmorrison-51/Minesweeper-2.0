@@ -13,4 +13,8 @@ public struct Cell
     public CellState State;
     public int AdjacentMines;
     public bool Exploded;
+
+    // Mystery cells hide AdjacentMines until MysteryNeeded of their neighbors are revealed.
+    public bool IsMystery;
+    public int MysteryNeeded;
 }

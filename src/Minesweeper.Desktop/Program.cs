@@ -1,5 +1,3 @@
-using Minesweeper.Core;
-
 namespace Minesweeper.Desktop;
 
 static class Program
@@ -20,16 +18,10 @@ static class Program
 
             switch (mode)
             {
-                case GameMode.Classic:
-                case GameMode.Hex:
-                    var game = new MainForm(mode == GameMode.Hex ? BoardShape.Hex : BoardShape.Square);
+                default:
+                    var game = new MainForm(mode);
                     Application.Run(game);
                     if (!game.ReturnToMenu) return;
-                    break;
-
-                case GameMode.HexChallenge:
-                    MessageBox.Show("Hex Challenge is coming soon.",
-                        "Minesweeper 2.0", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     break;
             }
         }

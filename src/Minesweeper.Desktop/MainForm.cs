@@ -27,11 +27,20 @@ public sealed class MainForm : Form
     public bool ReturnToMenu { get; private set; }
 
     private readonly BoardShape _shape;
+    private readonly bool _challenge;
+    private readonly ToolStripMenuItem _nextLevelItem = new("&Next Level");
+    private int _level = 1;
 
-    public MainForm(BoardShape shape = BoardShape.Square)
+    public MainForm(GameMode mode = GameMode.Classic)
     {
-        _shape = shape;
-        Text = shape == BoardShape.Hex ? "Hex Minesweeper" : "Minesweeper";
+        _shape = mode == GameMode.Classic ? BoardShape.Square : BoardShape.Hex;
+        _challenge = mode == GameMode.HexChallenge;
+        Text = mode switch
+        {
+            GameMode.Hex => "Hex Minesweeper",
+            GameMode.HexChallenge => "Hex Challenge",
+            _ => "Minesweeper",
+        };
         BackColor = Gray;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -48,6 +57,11 @@ public sealed class MainForm : Form
             _ => Difficulty.Beginner,
         };
         _difficulty = _difficulty.WithShape(_shape);
+        if (_challenge)
+        {
+            _level = Math.Clamp(_save.ChallengeCurrent, 1, _save.ChallengePlayable);
+            _difficulty = ChallengeLevel.Get(_level).Difficulty;
+        }
 
         BuildMenu();
         Controls.Add(_menu);
@@ -71,19 +85,30 @@ public sealed class MainForm : Form
     private void BuildMenu()
     {
         var game = new ToolStripMenuItem("&Game");
-        game.DropDownItems.Add(MenuItem("&New", Keys.F2, NewGame));
-        game.DropDownItems.Add(new ToolStripSeparator());
-        foreach (var d in new[] { Difficulty.Beginner, Difficulty.Intermediate, Difficulty.Expert })
+        if (_challenge)
         {
-            var item = MenuItem($"&{d.Name}", Keys.None, () => SetDifficulty(d.WithShape(_shape)));
-            _difficultyItems[d.Name] = item;
-            game.DropDownItems.Add(item);
+            game.DropDownItems.Add(MenuItem("&Retry Level", Keys.F2, NewGame));
+            _nextLevelItem.ShortcutKeys = Keys.F3;
+            _nextLevelItem.Click += (_, _) => GoToLevel(_level + 1);
+            game.DropDownItems.Add(_nextLevelItem);
+            game.DropDownItems.Add(MenuItem("Choose &Level...", Keys.F4, ShowLevelSelect));
         }
-        var custom = MenuItem("&Custom...", Keys.None, ShowCustomDialog);
-        _difficultyItems["Custom"] = custom;
-        game.DropDownItems.Add(custom);
-        game.DropDownItems.Add(new ToolStripSeparator());
-        game.DropDownItems.Add(MenuItem("Best &Times...", Keys.None, ShowBestTimes));
+        else
+        {
+            game.DropDownItems.Add(MenuItem("&New", Keys.F2, NewGame));
+            game.DropDownItems.Add(new ToolStripSeparator());
+            foreach (var d in new[] { Difficulty.Beginner, Difficulty.Intermediate, Difficulty.Expert })
+            {
+                var item = MenuItem($"&{d.Name}", Keys.None, () => SetDifficulty(d.WithShape(_shape)));
+                _difficultyItems[d.Name] = item;
+                game.DropDownItems.Add(item);
+            }
+            var custom = MenuItem("&Custom...", Keys.None, ShowCustomDialog);
+            _difficultyItems["Custom"] = custom;
+            game.DropDownItems.Add(custom);
+            game.DropDownItems.Add(new ToolStripSeparator());
+            game.DropDownItems.Add(MenuItem("Best &Times...", Keys.None, ShowBestTimes));
+        }
         game.DropDownItems.Add(new ToolStripSeparator());
         game.DropDownItems.Add(MenuItem("Main &Menu", Keys.None, () =>
         {
@@ -119,6 +144,18 @@ public sealed class MainForm : Form
         SetDifficulty(result.WithShape(_shape));
     }
 
+    private void GoToLevel(int level)
+    {
+        _level = Math.Clamp(level, 1, _save.ChallengePlayable);
+        NewGame();
+    }
+
+    private void ShowLevelSelect()
+    {
+        using var dialog = new LevelSelectDialog(_save, _level);
+        if (dialog.ShowDialog(this) == DialogResult.OK) GoToLevel(dialog.SelectedLevel);
+    }
+
     private void ShowBestTimes()
     {
         string Line(Difficulty d) =>
@@ -137,7 +174,19 @@ public sealed class MainForm : Form
         _stopwatch.Reset();
         _bestTimeRecorded = false;
 
-        _board = new Board(_difficulty);
+        if (_challenge)
+        {
+            var level = ChallengeLevel.Get(_level);
+            _difficulty = level.Difficulty;
+            _board = new Board(level.Difficulty, null, level.Rules);
+            _save.ChallengeCurrent = _level;
+            Text = $"Hex Challenge - Level {_level} of {ChallengeLevel.Count}";
+            _nextLevelItem.Enabled = _level < _save.ChallengePlayable;
+        }
+        else
+        {
+            _board = new Board(_difficulty);
+        }
         _boardControl.Board = _board;
 
         // Tiles start at the chosen size and shrink only if the window would not fit the screen.
@@ -155,8 +204,11 @@ public sealed class MainForm : Form
             Math.Max(area.Left, Math.Min(Left, area.Right - Width)),
             Math.Max(area.Top, Math.Min(Top, area.Bottom - Height)));
 
-        if (_shape == BoardShape.Hex) _save.LastHexDifficulty = _difficulty.Name;
-        else _save.LastDifficulty = _difficulty.Name;
+        if (!_challenge)
+        {
+            if (_shape == BoardShape.Hex) _save.LastHexDifficulty = _difficulty.Name;
+            else _save.LastDifficulty = _difficulty.Name;
+        }
         foreach (var (name, item) in _difficultyItems) item.Checked = name == _difficulty.Name;
 
         LayoutControls();
@@ -221,8 +273,42 @@ public sealed class MainForm : Form
         UpdateFace();
     }
 
+    private void RecordChallengeWin()
+    {
+        if (_bestTimeRecorded) return;
+        _bestTimeRecorded = true;
+
+        long ms = _stopwatch.ElapsedMilliseconds;
+        int cleared = _level;
+        bool newBest = _save.TrySetBestTime(_difficulty.Key, ms);
+        int? next = _save.CompleteChallengeLevel(cleared);
+        _save.Save(_savePath);
+        _nextLevelItem.Enabled = _level < _save.ChallengePlayable;
+
+        string message = $"Level {cleared} cleared in {ms / 1000.0:0.00} seconds" + (newBest ? " - a new best!" : ".");
+        BeginInvoke(() =>
+        {
+            if (next is int n)
+            {
+                var answer = MessageBox.Show(this, $"{message}\n\nPlay level {n}?", "Level Cleared",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+                if (answer == DialogResult.Yes) GoToLevel(n);
+            }
+            else
+            {
+                MessageBox.Show(this, $"{message}\n\nYou have cleared all {ChallengeLevel.Count} levels of the Hex Challenge!",
+                    "Challenge Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        });
+    }
+
     private void RecordWin()
     {
+        if (_challenge)
+        {
+            RecordChallengeWin();
+            return;
+        }
         if (_bestTimeRecorded || _difficulty.Name == "Custom") return;
         _bestTimeRecorded = true;
 
@@ -240,7 +326,7 @@ public sealed class MainForm : Form
 
     private void UpdateHeader()
     {
-        _mineCounter.Value = _board.MinesRemaining;
+        _mineCounter.Value = _board.FlagsRemaining;
         _timerDisplay.Value = (int)_stopwatch.Elapsed.TotalSeconds;
     }
 
