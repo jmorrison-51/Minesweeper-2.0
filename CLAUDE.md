@@ -19,7 +19,7 @@ dotnet run --project src/Minesweeper.Desktop
 dotnet publish src/Minesweeper.Desktop -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o dist
 ```
 
-No linter is configured. The owner plays the published `dist/Minesweeper.Desktop.exe` (git-ignored), not `dotnet run`, so republish after any change they should see; it fails if an instance is running. There is a local git repo with no remote.
+No linter is configured. The owner plays the published `dist/Minesweeper.Desktop.exe` (git-ignored), not `dotnet run`, so republish after any change they should see; it fails if an instance is running. The git remote `origin` is the private GitHub repo `jmorrison-51/Minesweeper-2.0` (branch `main`); the separate `jmorrison-51/Minesweeper` repo is the unrelated original game.
 
 The shell is Git Bash on Windows (PowerShell for Windows-specific commands). Its working directory persists between calls, so use absolute paths or a subshell for `cd`.
 
