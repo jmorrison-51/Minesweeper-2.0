@@ -1,3 +1,5 @@
+using Minesweeper.Core;
+
 namespace Minesweeper.Desktop;
 
 public enum GameMode
@@ -16,6 +18,9 @@ public sealed class StartForm : Form
     private readonly Label _subtitle = new();
     private readonly ModeButton[] _buttons;
     private readonly ModeButton _exit;
+    private readonly Label _tileLabel = new();
+    private readonly ModeButton[] _tileButtons;
+    private readonly SaveData _save;
 
     public GameMode? Selected { get; private set; }
 
@@ -44,9 +49,23 @@ public sealed class StartForm : Form
         _exit = new ModeButton("Exit", null);
         _exit.Click += (_, _) => Close();
 
+        _save = SaveData.Load(Program.SavePath);
+        if (!SaveData.TileSizes.Contains(_save.TileSize)) _save.TileSize = 48;
+        _tileLabel.Text = "Tile size";
+        _tileLabel.TextAlign = ContentAlignment.MiddleCenter;
+        _tileLabel.Font = new Font("Segoe UI", 10f);
+        _tileButtons = SaveData.TileSizes.Select(size =>
+        {
+            var button = new ModeButton(size.ToString(), null) { Checked = size == _save.TileSize };
+            button.Click += (_, _) => SetTileSize(size);
+            return button;
+        }).ToArray();
+
         Controls.Add(_title);
         Controls.Add(_subtitle);
         Controls.AddRange(_buttons);
+        Controls.Add(_tileLabel);
+        Controls.AddRange(_tileButtons);
         Controls.Add(_exit);
 
         LayoutControls();
@@ -61,6 +80,14 @@ public sealed class StartForm : Form
             Close();
         };
         return button;
+    }
+
+    private void SetTileSize(int size)
+    {
+        _save.TileSize = size;
+        _save.Save(Program.SavePath);
+        for (int i = 0; i < _tileButtons.Length; i++)
+            _tileButtons[i].Checked = SaveData.TileSizes[i] == size;
     }
 
     private void LayoutControls()
@@ -82,7 +109,14 @@ public sealed class StartForm : Form
             y += buttonHeight + gap;
         }
 
-        y += gap;
+        _tileLabel.SetBounds(pad, y, width, LogicalToDeviceUnits(24));
+        y += _tileLabel.Height;
+        int tileGap = LogicalToDeviceUnits(8);
+        int tileWidth = (width - tileGap * (_tileButtons.Length - 1)) / _tileButtons.Length;
+        for (int i = 0; i < _tileButtons.Length; i++)
+            _tileButtons[i].SetBounds(pad + i * (tileWidth + tileGap), y, tileWidth, LogicalToDeviceUnits(36));
+        y += LogicalToDeviceUnits(36) + gap * 2;
+
         _exit.SetBounds(pad + width / 3, y, width / 3, LogicalToDeviceUnits(34));
 
         ClientSize = new Size(width + 2 * pad, _exit.Bottom + pad);
@@ -96,6 +130,19 @@ public sealed class ModeButton : Control
     private readonly string? _description;
     private bool _hover;
     private bool _pressed;
+    private bool _checked;
+
+    /// <summary>Toggle-style state: drawn sunken, used for the current tile size.</summary>
+    public bool Checked
+    {
+        get => _checked;
+        set
+        {
+            if (_checked == value) return;
+            _checked = value;
+            Invalidate();
+        }
+    }
 
     public ModeButton(string title, string? description)
     {
@@ -136,14 +183,15 @@ public sealed class ModeButton : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
-        g.Clear(_hover ? Color.FromArgb(208, 208, 208) : Color.FromArgb(192, 192, 192));
+        bool down = _pressed || _checked;
+        g.Clear(_checked ? Color.FromArgb(160, 160, 160) : _hover ? Color.FromArgb(208, 208, 208) : Color.FromArgb(192, 192, 192));
 
         var bounds = new Rectangle(0, 0, Width, Height);
-        ControlPaint.DrawBorder3D(g, bounds, _pressed ? Border3DStyle.SunkenInner : Border3DStyle.Raised);
+        ControlPaint.DrawBorder3D(g, bounds, down ? Border3DStyle.SunkenInner : Border3DStyle.Raised);
 
         int pad = LogicalToDeviceUnits(12);
         var inner = Rectangle.Inflate(bounds, -pad, -LogicalToDeviceUnits(6));
-        if (_pressed) inner.Offset(1, 1);
+        if (down) inner.Offset(1, 1);
 
         using var titleFont = new Font("Segoe UI", 13f, FontStyle.Bold);
         using var descFont = new Font("Segoe UI", 9f);

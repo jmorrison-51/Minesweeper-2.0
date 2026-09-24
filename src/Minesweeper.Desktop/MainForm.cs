@@ -7,8 +7,7 @@ public sealed class MainForm : Form
 {
     private static readonly Color Gray = Color.FromArgb(192, 192, 192);
 
-    private readonly string _savePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Minesweeper2", "save.json");
+    private readonly string _savePath = Program.SavePath;
 
     private readonly SaveData _save;
     private readonly MenuStrip _menu = new();
@@ -26,8 +25,6 @@ public sealed class MainForm : Form
 
     /// <summary>True when the form was closed to go back to the start screen rather than to quit.</summary>
     public bool ReturnToMenu { get; private set; }
-
-    private const int TileSize = 48;
 
     private readonly BoardShape _shape;
 
@@ -143,9 +140,10 @@ public sealed class MainForm : Form
         _board = new Board(_difficulty);
         _boardControl.Board = _board;
 
-        // Tiles start at TileSize and shrink only if the window would not fit the screen.
+        // Tiles start at the chosen size and shrink only if the window would not fit the screen.
         var area = Screen.FromControl(this).WorkingArea;
-        int cell = LogicalToDeviceUnits(TileSize);
+        int tileSize = SaveData.TileSizes.Contains(_save.TileSize) ? _save.TileSize : 48;
+        int cell = LogicalToDeviceUnits(tileSize);
         while (true)
         {
             _boardControl.ApplyScale(cell);

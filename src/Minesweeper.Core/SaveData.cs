@@ -6,6 +6,11 @@ public sealed class SaveData
 {
     public string LastDifficulty { get; set; } = "Beginner";
     public string LastHexDifficulty { get; set; } = "Beginner";
+
+    public static readonly int[] TileSizes = [24, 36, 48];
+
+    // Tile edge length in logical pixels, chosen on the start screen.
+    public int TileSize { get; set; } = 48;
     public int CustomColumns { get; set; } = 16;
     public int CustomRows { get; set; } = 16;
     public int CustomMines { get; set; } = 40;

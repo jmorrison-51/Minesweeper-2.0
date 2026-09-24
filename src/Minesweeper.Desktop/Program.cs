@@ -4,6 +4,9 @@ namespace Minesweeper.Desktop;
 
 static class Program
 {
+    public static readonly string SavePath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Minesweeper2", "save.json");
+
     [STAThread]
     static void Main()
     {
