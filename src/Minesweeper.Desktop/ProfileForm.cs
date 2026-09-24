@@ -114,7 +114,15 @@ public sealed class ProfileForm : Form
             "Delete Player", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
         if (answer != DialogResult.Yes) return;
 
-        _store.Delete(name);
+        try
+        {
+            _store.Delete(name);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, $"Could not delete {name}: {ex.Message}", "Delete Player",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
         Reload(null);
     }
 

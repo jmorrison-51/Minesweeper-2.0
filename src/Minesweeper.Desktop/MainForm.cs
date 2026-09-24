@@ -3,7 +3,7 @@ using Minesweeper.Core;
 
 namespace Minesweeper.Desktop;
 
-public sealed class MainForm : Form
+public sealed class MainForm : Form, ISavesProgress
 {
     private static readonly Color Gray = Color.FromArgb(192, 192, 192);
 
@@ -22,6 +22,7 @@ public sealed class MainForm : Form
     private Difficulty _difficulty;
     private Board _board = null!;
     private bool _bestTimeRecorded;
+    private bool _startRecorded;
 
     /// <summary>True when the form was closed to go back to the start screen rather than to quit.</summary>
     public bool ReturnToMenu { get; private set; }
@@ -76,8 +77,14 @@ public sealed class MainForm : Form
         _faceButton.Click += (_, _) => NewGame();
         _clock.Tick += (_, _) => UpdateTimer();
 
-        FormClosing += (_, _) => _save.Save(_savePath);
-        DpiChanged += (_, _) => NewGame();
+        FormClosing += (_, _) => SaveProgress();
+        FormClosed += (_, _) => _clock.Dispose();
+        // Moving to a monitor with a different DPI rescales the board without losing the game in progress.
+        DpiChanged += (_, _) =>
+        {
+            Fit();
+            UpdateHeader();
+        };
 
         NewGame();
     }
@@ -117,6 +124,19 @@ public sealed class MainForm : Form
         }));
         game.DropDownItems.Add(MenuItem("E&xit", Keys.None, Close));
         _menu.Items.Add(game);
+
+        var help = new ToolStripMenuItem("&Help");
+        help.DropDownItems.Add(MenuItem("&Controls...", Keys.F1, () => ControlsHelp.Show(this, endless: false)));
+        _menu.Items.Add(help);
+    }
+
+    public void SaveProgress() => Program.Save(_save, _savePath, this);
+
+    // Keyboard play goes to the board; menu shortcuts (F1-F4) are handled first by the menu.
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (base.ProcessCmdKey(ref msg, keyData)) return true;
+        return _boardControl.HandleKey(keyData);
     }
 
     private static ToolStripMenuItem MenuItem(string text, Keys shortcut, Action onClick)
@@ -173,14 +193,16 @@ public sealed class MainForm : Form
         _clock.Stop();
         _stopwatch.Reset();
         _bestTimeRecorded = false;
+        _startRecorded = false;
 
         if (_challenge)
         {
             var level = ChallengeLevel.Get(_level);
             _difficulty = level.Difficulty;
-            _board = new Board(level.Difficulty, null, level.Rules);
+            _board = new Board(level.Difficulty, null, _save.ChallengeRules(_level));
             _save.ChallengeCurrent = _level;
-            Text = $"Hex Challenge - Level {_level} of {ChallengeLevel.Count}";
+            Text = $"Hex Challenge - Level {_level} of {ChallengeLevel.Count}" +
+                   (_save.NeedsGuaranteedOpener(_level) ? " - guaranteed opening" : "");
             _nextLevelItem.Enabled = _level < _save.ChallengePlayable;
         }
         else
@@ -188,8 +210,22 @@ public sealed class MainForm : Form
             _board = new Board(_difficulty);
         }
         _boardControl.Board = _board;
+        Fit();
 
-        // Tiles start at the chosen size and shrink only if the window would not fit the screen.
+        if (!_challenge)
+        {
+            if (_shape == BoardShape.Hex) _save.LastHexDifficulty = _difficulty.Name;
+            else _save.LastDifficulty = _difficulty.Name;
+        }
+        foreach (var (name, item) in _difficultyItems) item.Checked = name == _difficulty.Name;
+
+        UpdateHeader();
+        UpdateFace();
+    }
+
+    // Tiles start at the chosen size and shrink only if the window would not fit the screen.
+    private void Fit()
+    {
         var area = Screen.FromControl(this).WorkingArea;
         int tileSize = SaveData.TileSizes.Contains(_save.TileSize) ? _save.TileSize : 48;
         int cell = LogicalToDeviceUnits(tileSize);
@@ -203,17 +239,6 @@ public sealed class MainForm : Form
         Location = new Point(
             Math.Max(area.Left, Math.Min(Left, area.Right - Width)),
             Math.Max(area.Top, Math.Min(Top, area.Bottom - Height)));
-
-        if (!_challenge)
-        {
-            if (_shape == BoardShape.Hex) _save.LastHexDifficulty = _difficulty.Name;
-            else _save.LastDifficulty = _difficulty.Name;
-        }
-        foreach (var (name, item) in _difficultyItems) item.Checked = name == _difficulty.Name;
-
-        LayoutControls();
-        UpdateHeader();
-        UpdateFace();
     }
 
     private void LayoutControls()
@@ -269,6 +294,14 @@ public sealed class MainForm : Form
             if (_board.Status == GameStatus.Won) RecordWin();
         }
 
+        // Once a challenge game's start is decided, track bad starts for the guaranteed opening.
+        if (_challenge && !_startRecorded && (_board.RevealActions >= 2 || _board.Status is GameStatus.Won or GameStatus.Lost))
+        {
+            _startRecorded = true;
+            _save.RecordChallengeStart(_level, _board.OpeningGuessFailed);
+            SaveProgress();
+        }
+
         UpdateHeader();
         UpdateFace();
     }
@@ -278,7 +311,7 @@ public sealed class MainForm : Form
         if (_bestTimeRecorded) return;
         _bestTimeRecorded = true;
 
-        long ms = _stopwatch.ElapsedMilliseconds;
+        long ms = SaveData.SolveTime(_stopwatch.ElapsedMilliseconds);
         int cleared = _level;
         bool newBest = _save.TrySetBestTime(_difficulty.Key, ms);
         int? next = _save.CompleteChallengeLevel(cleared);
@@ -289,7 +322,7 @@ public sealed class MainForm : Form
         if (flagless) _save.MarkFlaglessClear(cleared);
         bool endlessJustUnlocked = !endlessWasUnlocked && _save.EndlessUnlocked;
 
-        _save.Save(_savePath);
+        SaveProgress();
         _nextLevelItem.Enabled = _level < _save.ChallengePlayable;
 
         string message = $"Level {cleared} cleared in {ms / 1000.0:0.00} seconds" + (newBest ? " - a new best!" : ".");
@@ -321,10 +354,10 @@ public sealed class MainForm : Form
         if (_bestTimeRecorded || _difficulty.Name == "Custom") return;
         _bestTimeRecorded = true;
 
-        long ms = _stopwatch.ElapsedMilliseconds;
+        long ms = SaveData.SolveTime(_stopwatch.ElapsedMilliseconds);
         if (_save.TrySetBestTime(_difficulty.Key, ms))
         {
-            _save.Save(_savePath);
+            SaveProgress();
             BeginInvoke(() => MessageBox.Show(this,
                 $"New best time for {_difficulty.Name}: {ms / 1000.0:0.00} seconds!",
                 "Fastest Time", MessageBoxButtons.OK, MessageBoxIcon.Information));

@@ -103,6 +103,38 @@ public class EncryptionTests
         SampleSave().Save(dir.File("save.dat"));
         Assert.Single(Directory.GetFiles(dir.Path));
     }
+
+    [Fact]
+    public void AFailedSaveReportsTheError()
+    {
+        using var dir = new TempDir();
+        string path = dir.File("save.dat");
+        Directory.CreateDirectory(path); // a folder where the file should go cannot be replaced
+
+        Assert.False(SampleSave().TrySave(path, out string error));
+        Assert.NotEmpty(error);
+        Assert.True(SampleSave().TrySave(dir.File("ok.dat"), out error));
+        Assert.Empty(error);
+    }
+
+    [Fact]
+    public void NullsAndOutOfRangeValuesInAnOldSaveAreRepaired()
+    {
+        using var dir = new TempDir();
+        string path = dir.File("save.json");
+        File.WriteAllText(path,
+            """{"BestTimesMs":null,"ChallengeFlaglessLevels":[3,3,0,99],"ChallengeUnlocked":500,"ChallengeCurrent":-4,"EndlessBestMs":-1,"LastDifficulty":null}""");
+
+        var save = SaveData.LoadAny(path);
+
+        Assert.Empty(save.BestTimesMs);
+        Assert.Equal(new[] { 3 }, save.ChallengeFlaglessLevels);
+        Assert.Equal(ChallengeLevel.Count + 1, save.ChallengeUnlocked);
+        Assert.Equal(1, save.ChallengeCurrent);
+        Assert.Equal(0, save.EndlessBestMs);
+        Assert.Equal("Beginner", save.LastDifficulty);
+        Assert.NotEmpty(Leaderboard.Challenge(new[] { ("A", save) }));
+    }
 }
 
 public class ProfileTests
@@ -289,5 +321,18 @@ public class AdminTests
 
         Assert.Empty(store.List());
         Assert.Throws<ArgumentException>(() => store.Create("Admin"));
+    }
+
+    [Fact]
+    public void StrayFilesInTheProfileFolderAreNotListed()
+    {
+        using var dir = new TempDir();
+        var store = new ProfileStore(dir.Path);
+        store.Create("Alice");
+        File.WriteAllText(dir.File("p_.dat"), "");
+        File.WriteAllText(dir.File("p_a.b.dat"), "");
+        File.WriteAllText(dir.File("p_ spaced.dat"), "");
+
+        Assert.Equal(new[] { "Alice" }, store.List());
     }
 }

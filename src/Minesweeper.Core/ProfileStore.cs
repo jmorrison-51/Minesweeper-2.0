@@ -40,6 +40,8 @@ public sealed class ProfileStore
         if (!Directory.Exists(_directory)) return Array.Empty<string>();
         return Directory.EnumerateFiles(_directory, Prefix + "*" + Extension)
             .Select(f => Path.GetFileNameWithoutExtension(f)[Prefix.Length..])
+            // Skip stray files ("p_.dat", "p_a.b.dat") that could not have come from Create.
+            .Where(n => n.Length <= MaxNameLength && NamePattern.IsMatch(n) && n == n.Trim())
             .Where(n => !AdminAccess.IsAdminName(n))
             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -60,7 +62,8 @@ public sealed class ProfileStore
         name = name.Trim();
         if (Find(name) != null) throw new InvalidOperationException($"There is already a player called {name}.");
 
-        new SaveData().Save(PathFor(name));
+        if (!new SaveData().TrySave(PathFor(name), out string saveError))
+            throw new IOException($"Could not create the player file: {saveError}");
         return name;
     }
 

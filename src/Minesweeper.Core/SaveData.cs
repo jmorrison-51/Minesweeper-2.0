@@ -33,6 +33,32 @@ public sealed class SaveData
 
     public static string ChallengeKey(int level) => ChallengeLevel.Get(level).Difficulty.Key;
 
+    /// <summary>
+    /// Games in a row on a level without a safe start (9-20) whose opening guess failed (see
+    /// <see cref="Board.OpeningGuessFailed"/>). At <see cref="BadStartsForOpener"/> the next such game gets a
+    /// guaranteed opening; that game opens an area, so it resets the count.
+    /// </summary>
+    public int ChallengeBadStarts { get; set; }
+
+    public const int BadStartsForOpener = 2;
+
+    public bool NeedsGuaranteedOpener(int level) =>
+        !ChallengeLevel.Get(level).Rules.SafeStart && ChallengeBadStarts >= BadStartsForOpener;
+
+    /// <summary>Records how a challenge game started, once it is decided (second reveal or game over).</summary>
+    public void RecordChallengeStart(int level, bool openingGuessFailed)
+    {
+        if (ChallengeLevel.Get(level).Rules.SafeStart) return;
+        ChallengeBadStarts = openingGuessFailed ? ChallengeBadStarts + 1 : 0;
+    }
+
+    /// <summary>The rules to play a level with, adding a safe start if the player has earned one.</summary>
+    public BoardRules ChallengeRules(int level)
+    {
+        var rules = ChallengeLevel.Get(level).Rules;
+        return NeedsGuaranteedOpener(level) ? rules with { SafeStart = true } : rules;
+    }
+
     // Levels cleared without the player ever placing a flag. Clearing all 20 unlocks Endless Mode.
     public List<int> ChallengeFlaglessLevels { get; set; } = new();
 
@@ -74,8 +100,14 @@ public sealed class SaveData
     // Best win time in milliseconds, keyed by Difficulty.Key ("Beginner", "Hex Beginner", ...).
     public Dictionary<string, long> BestTimesMs { get; set; } = new();
 
+    /// <summary>Shortest time a win can record, so a lucky win on the first click cannot set an unbeatable 0.</summary>
+    public const long MinSolveMs = 1000;
+
+    public static long SolveTime(long elapsedMs) => Math.Max(MinSolveMs, elapsedMs);
+
     public bool TrySetBestTime(string difficultyName, long elapsedMs)
     {
+        elapsedMs = SolveTime(elapsedMs);
         if (BestTimesMs.TryGetValue(difficultyName, out long best) && best <= elapsedMs) return false;
         BestTimesMs[difficultyName] = elapsedMs;
         return true;
@@ -92,7 +124,7 @@ public sealed class SaveData
             if (File.Exists(path))
             {
                 if (SaveCrypto.TryDecrypt(File.ReadAllBytes(path), out byte[] json))
-                    return JsonSerializer.Deserialize<SaveData>(json) ?? new SaveData();
+                    return (JsonSerializer.Deserialize<SaveData>(json) ?? new SaveData()).Normalized();
                 KeepUnreadableCopy(path);
             }
         }
@@ -109,7 +141,7 @@ public sealed class SaveData
         {
             byte[] bytes = File.ReadAllBytes(path);
             if (SaveCrypto.TryDecrypt(bytes, out byte[] json)) bytes = json;
-            return JsonSerializer.Deserialize<SaveData>(bytes) ?? new SaveData();
+            return (JsonSerializer.Deserialize<SaveData>(bytes) ?? new SaveData()).Normalized();
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
@@ -117,7 +149,10 @@ public sealed class SaveData
         }
     }
 
-    public void Save(string path)
+    public void Save(string path) => TrySave(path, out _);
+
+    /// <summary>Saves, reporting a failure (disk full, file locked, no permission) instead of throwing.</summary>
+    public bool TrySave(string path, out string error)
     {
         try
         {
@@ -128,10 +163,33 @@ public sealed class SaveData
             string temp = path + ".tmp";
             File.WriteAllBytes(temp, data);
             File.Move(temp, path, overwrite: true);
+            error = "";
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            error = ex.Message;
+            return false;
         }
+    }
+
+    // A save can come from an old version or plain JSON (LoadAny), so repair anything that would break the
+    // game or the scoreboards: nulls where collections are expected, and values outside their range.
+    private SaveData Normalized()
+    {
+        LastDifficulty ??= "Beginner";
+        LastHexDifficulty ??= "Beginner";
+        ChallengeFlaglessLevels = (ChallengeFlaglessLevels ?? new())
+            .Where(l => l is >= 1 and <= ChallengeLevel.Count).Distinct().ToList();
+        BestTimesMs = (BestTimesMs ?? new())
+            .Where(p => p.Key != null && p.Value >= 0)
+            .ToDictionary(p => p.Key, p => p.Value);
+        ChallengeUnlocked = Math.Clamp(ChallengeUnlocked, 1, ChallengeLevel.Count + 1);
+        ChallengeCurrent = Math.Clamp(ChallengeCurrent, 1, ChallengeLevel.Count);
+        EndlessBestMs = Math.Max(0, EndlessBestMs);
+        EndlessBestRows = Math.Max(0, EndlessBestRows);
+        ChallengeBadStarts = Math.Max(0, ChallengeBadStarts);
+        return this;
     }
 
     private static void KeepUnreadableCopy(string path)

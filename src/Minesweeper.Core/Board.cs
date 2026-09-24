@@ -16,6 +16,11 @@ public sealed class Board
 
     public Board(Difficulty difficulty, Random? random = null, BoardRules? rules = null)
     {
+        if (difficulty.Columns < 1 || difficulty.Rows < 1)
+            throw new ArgumentOutOfRangeException(nameof(difficulty), "A board needs at least one row and column.");
+        if (difficulty.Mines < 0 || difficulty.Mines >= difficulty.Columns * difficulty.Rows)
+            throw new ArgumentOutOfRangeException(nameof(difficulty), "There must be at least one safe cell.");
+
         Difficulty = difficulty;
         Rules = rules ?? BoardRules.Classic;
         Columns = difficulty.Columns;
@@ -28,10 +33,12 @@ public sealed class Board
 
     public Difficulty Difficulty { get; }
     public BoardRules Rules { get; }
-    public int FlagLimit { get; }
+    public int FlagLimit { get; private set; }
     public int Columns { get; }
     public int Rows { get; }
-    public int MineCount { get; }
+
+    /// <summary>Mines on the board. Only lower than the difficulty's count when a safe start leaves too little room.</summary>
+    public int MineCount { get; private set; }
     public GameStatus Status { get; private set; } = GameStatus.Ready;
     public int FlagCount { get; private set; }
 
@@ -40,6 +47,17 @@ public sealed class Board
     /// flags added to every mine on a win are not counted. Used for "cleared without flags".
     /// </summary>
     public int FlagsPlaced { get; private set; }
+    /// <summary>Reveals and chords that opened at least one cell.</summary>
+    public int RevealActions { get; private set; }
+
+    /// <summary>
+    /// The first click opened nothing but a single number, and the very next reveal hit a mine: the player
+    /// was forced to guess at the start and lost. Used to grant a guaranteed opening after repeated bad luck.
+    /// </summary>
+    public bool OpeningGuessFailed { get; private set; }
+
+    private bool _firstClickIsolated;
+
     public int MinesRemaining => MineCount - FlagCount;
     public int FlagsRemaining => Math.Max(0, FlagLimit - FlagCount);
 
@@ -94,13 +112,22 @@ public sealed class Board
         if (IsOver || !InBounds(x, y)) return;
         if (_cells[x, y].State != CellState.Hidden) return;
 
-        if (Status == GameStatus.Ready)
+        bool first = Status == GameStatus.Ready;
+        if (first)
         {
             PlaceMines(x, y);
             Status = GameStatus.Playing;
         }
 
         RevealFrom(x, y);
+        CountRevealAction();
+        if (first) _firstClickIsolated = _revealedSafe == 1 && _cells[x, y].AdjacentMines > 0;
+    }
+
+    private void CountRevealAction()
+    {
+        RevealActions++;
+        if (RevealActions == 2 && _firstClickIsolated && Status == GameStatus.Lost) OpeningGuessFailed = true;
     }
 
     public void ToggleFlag(int x, int y)
@@ -137,11 +164,17 @@ public sealed class Board
             if (_cells[nx, ny].State == CellState.Flagged) flags++;
         if (flags != cell.AdjacentMines) return;
 
+        bool opened = false;
         foreach (var (nx, ny) in Neighbors(x, y))
         {
-            if (_cells[nx, ny].State == CellState.Hidden) RevealFrom(nx, ny);
+            if (_cells[nx, ny].State == CellState.Hidden)
+            {
+                RevealFrom(nx, ny);
+                opened = true;
+            }
             if (IsOver) break;
         }
+        if (opened) CountRevealAction();
     }
 
     private bool IsOver => Status is GameStatus.Won or GameStatus.Lost;
@@ -189,7 +222,10 @@ public sealed class Board
         for (int i = 0; i < total; i++)
             if (!safe.Contains(i)) candidates.Add(i);
 
+        // Keep the win check (every safe cell revealed) and the flag counter honest if not all mines fit.
         int mines = Math.Min(MineCount, candidates.Count);
+        MineCount = mines;
+        FlagLimit = Math.Min(FlagLimit, mines);
         if (Rules.Clustering > 0) PlaceClusteredMines(candidates, mines);
         else PlaceScatteredMines(candidates, mines);
 

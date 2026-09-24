@@ -103,7 +103,15 @@ public sealed class NewPlayerDialog : Form
             return;
         }
 
-        PlayerName = _store.Create(_name.Text);
+        try
+        {
+            PlayerName = _store.Create(_name.Text);
+        }
+        catch (IOException ex)
+        {
+            _error.Text = ex.Message;
+            return;
+        }
         DialogResult = DialogResult.OK;
     }
 }

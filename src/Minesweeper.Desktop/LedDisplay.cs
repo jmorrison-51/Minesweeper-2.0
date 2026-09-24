@@ -36,7 +36,7 @@ public sealed class LedDisplay : Control
         using var font = new Font("Consolas", Height * 0.62f, FontStyle.Bold, GraphicsUnit.Pixel);
         using var ghost = new SolidBrush(Color.FromArgb(60, 0, 0));
         using var lit = new SolidBrush(Color.FromArgb(255, 30, 30));
-        var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        using var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
         var rect = new RectangleF(0, 0, Width, Height);
 
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;

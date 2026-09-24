@@ -4,10 +4,11 @@ using Minesweeper.Core;
 namespace Minesweeper.Desktop;
 
 /// <summary>Window for Endless Mode. Counters show rows cleared (left) and seconds survived (right).</summary>
-public sealed class EndlessForm : Form
+public sealed class EndlessForm : Form, ISavesProgress
 {
     private static readonly Color Gray = Color.FromArgb(192, 192, 192);
 
+    private readonly string _savePath = Program.SavePath;
     private readonly SaveData _save;
     private readonly MenuStrip _menu = new();
     private readonly LedDisplay _rowsDisplay = new();
@@ -37,6 +38,8 @@ public sealed class EndlessForm : Form
 
         var game = new ToolStripMenuItem("&Game");
         game.DropDownItems.Add(MenuItem("&New", Keys.F2, NewGame));
+        // Menu shortcuts need a modifier, so P and Esc are handled in ProcessCmdKey and only shown here.
+        game.DropDownItems.Add(new ToolStripMenuItem("&Pause", null, (_, _) => TogglePause()) { ShortcutKeyDisplayString = "P" });
         game.DropDownItems.Add(new ToolStripSeparator());
         game.DropDownItems.Add(MenuItem("Best &Run...", Keys.None, ShowBestRun));
         game.DropDownItems.Add(new ToolStripSeparator());
@@ -47,6 +50,10 @@ public sealed class EndlessForm : Form
         }));
         game.DropDownItems.Add(MenuItem("E&xit", Keys.None, Close));
         _menu.Items.Add(game);
+
+        var help = new ToolStripMenuItem("&Help");
+        help.DropDownItems.Add(MenuItem("&Controls...", Keys.F1, () => ControlsHelp.Show(this, endless: true)));
+        _menu.Items.Add(help);
 
         Controls.Add(_menu);
         MainMenuStrip = _menu;
@@ -59,7 +66,19 @@ public sealed class EndlessForm : Form
         _faceButton.Click += (_, _) => NewGame();
         _clock.Tick += (_, _) => Tick();
 
-        FormClosing += (_, _) => _save.Save(Program.SavePath);
+        // Leaving mid-run still counts the run so far.
+        FormClosing += (_, _) =>
+        {
+            RecordRunSoFar();
+            SaveProgress();
+        };
+        // Switching to another window (or a dialog) pauses the run; the tiles are hidden while paused.
+        Deactivate += (_, _) =>
+        {
+            if (_board.Status == GameStatus.Playing && !_field.Paused) TogglePause();
+        };
+        // The timer is not owned by the form, so it would keep running the abandoned board in the next screen.
+        FormClosed += (_, _) => _clock.Dispose();
         DpiChanged += (_, _) => Fit();
 
         NewGame();
@@ -83,9 +102,46 @@ public sealed class EndlessForm : Form
 
     private static string FormatTime(long ms) => $"{ms / 60000}:{ms / 1000 % 60:00}";
 
+    public void SaveProgress() => Program.Save(_save, _savePath, this);
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (base.ProcessCmdKey(ref msg, keyData)) return true;
+        if (keyData is Keys.P or Keys.Escape)
+        {
+            TogglePause();
+            return true;
+        }
+        return _field.HandleKey(keyData);
+    }
+
+    private void TogglePause()
+    {
+        if (_board.Status != GameStatus.Playing) return;
+        _field.Paused = !_field.Paused;
+        _lastTick = Stopwatch.GetTimestamp();
+        Text = _field.Paused ? "Endless Mode - Paused" : "Endless Mode";
+    }
+
+    /// <summary>Records a run that is being abandoned (new game, closing). Returns true if it was a new longest run.</summary>
+    private bool RecordRunSoFar()
+    {
+        if (_recorded || _board.Status != GameStatus.Playing) return false;
+        _recorded = true;
+        return _save.RecordEndlessRun((long)(_board.Elapsed * 1000), _board.RowsCleared);
+    }
+
     private void NewGame()
     {
+        if (_board != null && RecordRunSoFar())
+        {
+            SaveProgress();
+            MessageBox.Show(this, $"The run you left lasted {FormatTime(_save.EndlessBestMs)} - your longest yet!",
+                "Best Run", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
         _board = new EndlessBoard();
+        Text = "Endless Mode";
         _recorded = false;
         _lastTick = Stopwatch.GetTimestamp();
         _field.Board = _board;
@@ -155,7 +211,8 @@ public sealed class EndlessForm : Form
         double dt = Math.Min(0.25, (now - _lastTick) / (double)Stopwatch.Frequency);
         _lastTick = now;
 
-        if (_board.Status == GameStatus.Playing)
+        // A minimized window pauses the run: the player cannot see the rows, so nothing is gained.
+        if (_board.Status == GameStatus.Playing && !_field.Paused && WindowState != FormWindowState.Minimized)
         {
             _board.Advance(dt);
             UpdateHeader();
@@ -181,7 +238,7 @@ public sealed class EndlessForm : Form
         long ms = (long)(_board.Elapsed * 1000);
         int rows = _board.RowsCleared;
         bool newBest = _save.RecordEndlessRun(ms, rows);
-        _save.Save(Program.SavePath);
+        SaveProgress();
 
         string why = _board.LossReason == LossReason.Mine ? "You hit a mine!" : "The rows reached the bottom!";
         string message = $"{why}\n\nYou lasted {FormatTime(ms)} and cleared {rows} row{(rows == 1 ? "" : "s")}." +

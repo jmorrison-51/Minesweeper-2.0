@@ -229,4 +229,93 @@ public class ChallengeTests
             File.Delete(path);
         }
     }
+
+    // A level-12 board whose first click (the center) shows a lone number, so the player must guess.
+    private static Board IsolatedStart(out (int X, int Y) first)
+    {
+        for (int seed = 0; ; seed++)
+        {
+            var board = LevelBoard(12, seed);
+            first = (board.Columns / 2, board.Rows / 2);
+            board.Reveal(first.X, first.Y);
+            if (AllCells(board).Count(c => board[c.X, c.Y].State == CellState.Revealed) == 1) return board;
+        }
+    }
+
+    [Fact]
+    public void HittingAMineRightAfterALoneNumberIsAFailedOpeningGuess()
+    {
+        var board = IsolatedStart(out _);
+        var mine = AllCells(board).First(c => board[c.X, c.Y].IsMine);
+        board.Reveal(mine.X, mine.Y);
+
+        Assert.Equal(GameStatus.Lost, board.Status);
+        Assert.True(board.OpeningGuessFailed);
+    }
+
+    [Fact]
+    public void ASafeSecondRevealOrALaterMineIsNotAFailedOpeningGuess()
+    {
+        var board = IsolatedStart(out _);
+        var safe = AllCells(board).First(c => !board[c.X, c.Y].IsMine && board[c.X, c.Y].State == CellState.Hidden);
+        board.Reveal(safe.X, safe.Y);
+        var mine = AllCells(board).First(c => board[c.X, c.Y].IsMine);
+        board.Reveal(mine.X, mine.Y);
+
+        Assert.Equal(GameStatus.Lost, board.Status);
+        Assert.False(board.OpeningGuessFailed);
+    }
+
+    [Fact]
+    public void AMineRightAfterAnOpenedAreaIsNotAFailedOpeningGuess()
+    {
+        var board = LevelBoard(3, 1); // safe start: the first click always opens an area
+        board.Reveal(4, 4);
+        var mine = AllCells(board).First(c => board[c.X, c.Y].IsMine);
+        board.Reveal(mine.X, mine.Y);
+
+        Assert.False(board.OpeningGuessFailed);
+    }
+
+    [Fact]
+    public void TwoFailedOpeningsInARowEarnAGuaranteedOpenerOnLevelsWithoutASafeStart()
+    {
+        var save = new SaveData();
+        Assert.False(save.ChallengeRules(12).SafeStart);
+
+        save.RecordChallengeStart(12, openingGuessFailed: true);
+        Assert.False(save.NeedsGuaranteedOpener(12));
+        save.RecordChallengeStart(15, openingGuessFailed: true);
+
+        Assert.True(save.NeedsGuaranteedOpener(9));
+        Assert.True(save.ChallengeRules(20).SafeStart);
+        Assert.False(save.NeedsGuaranteedOpener(8)); // levels 1-8 already open safely
+
+        // The opener game opens an area, which is a good start and resets the count.
+        save.RecordChallengeStart(12, openingGuessFailed: false);
+        Assert.False(save.NeedsGuaranteedOpener(12));
+    }
+
+    [Fact]
+    public void AGoodStartBetweenBadOnesResetsTheCountAndSafeLevelsAreIgnored()
+    {
+        var save = new SaveData();
+        save.RecordChallengeStart(12, openingGuessFailed: true);
+        save.RecordChallengeStart(12, openingGuessFailed: false);
+        save.RecordChallengeStart(12, openingGuessFailed: true);
+        Assert.False(save.NeedsGuaranteedOpener(12));
+
+        save.RecordChallengeStart(3, openingGuessFailed: false); // level 3 has a safe start; not counted
+        save.RecordChallengeStart(12, openingGuessFailed: true);
+        Assert.True(save.NeedsGuaranteedOpener(12));
+    }
+
+    [Fact]
+    public void BestTimesAreNeverUnderOneSecond()
+    {
+        var save = new SaveData();
+        save.TrySetBestTime("Beginner", 0);
+        Assert.Equal(SaveData.MinSolveMs, save.BestTimesMs["Beginner"]);
+        Assert.False(save.TrySetBestTime("Beginner", 400));
+    }
 }

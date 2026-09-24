@@ -7,6 +7,21 @@ namespace Minesweeper.Desktop;
 public sealed class EndlessControl : Control
 {
     private EndlessBoard? _board;
+    private bool _paused;
+
+    // Keyboard cursor: a row serial and column, so it rides along with its row. Hidden (-1) until a key is used.
+    private int _cursorRow = -1, _cursorCol = -1;
+
+    /// <summary>While paused the tiles are hidden (so pausing gives no free thinking time) and clicks are ignored.</summary>
+    public bool Paused
+    {
+        get => _paused;
+        set
+        {
+            _paused = value;
+            Invalidate();
+        }
+    }
 
     public EndlessControl()
     {
@@ -23,6 +38,8 @@ public sealed class EndlessControl : Control
         set
         {
             _board = value;
+            _paused = false;
+            _cursorRow = _cursorCol = -1;
             Size = FieldSize();
             Invalidate();
         }
@@ -78,12 +95,50 @@ public sealed class EndlessControl : Control
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
-        if (_board == null || e.Button != MouseButtons.Left) return;
+        if (_board == null || _paused || e.Button != MouseButtons.Left) return;
+        _cursorRow = _cursorCol = -1;
         if (!CellAt(e.Location, out int serial, out int x)) return;
 
         _board.Reveal(serial, x);
         Invalidate();
         Changed?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Keyboard play: arrows (or WASD) move the cursor, Space/Enter reveals. Returns true if the key was used.</summary>
+    public bool HandleKey(Keys key)
+    {
+        if (_board == null || _paused) return false;
+
+        bool reveal = key is Keys.Space or Keys.Enter;
+        int dx = key switch { Keys.Left or Keys.A => -1, Keys.Right or Keys.D => 1, _ => 0 };
+        // Up is toward newer rows (higher serials) at the top of the field.
+        int dy = key switch { Keys.Up or Keys.W => 1, Keys.Down or Keys.S => -1, _ => 0 };
+        if (!reveal && dx == 0 && dy == 0) return false;
+
+        var rows = _board.VisibleRows.ToList();
+        if (rows.Count == 0) return true;
+
+        if (!_board.IsVisibleRow(_cursorRow))
+        {
+            // First use, or the cursor's row was cleared: go to the nearest row still on the field.
+            int target = _cursorRow < 0 ? rows[rows.Count / 2] : _cursorRow;
+            _cursorRow = rows.OrderBy(s => Math.Abs(s - target)).First();
+            if (_cursorCol < 0) _cursorCol = EndlessBoard.Columns / 2;
+        }
+        else if (dy != 0)
+        {
+            int index = rows.IndexOf(_cursorRow) + dy;
+            if (index >= 0 && index < rows.Count) _cursorRow = rows[index];
+        }
+        _cursorCol = Math.Clamp(_cursorCol + dx, 0, EndlessBoard.Columns - 1);
+
+        if (reveal)
+        {
+            _board.Reveal(_cursorRow, _cursorCol);
+            Changed?.Invoke(this, EventArgs.Empty);
+        }
+        Invalidate();
+        return true;
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -96,7 +151,16 @@ public sealed class EndlessControl : Control
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
 
         using var font = new Font("Segoe UI", CellSize * 0.58f, FontStyle.Bold, GraphicsUnit.Pixel);
-        var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        using var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+
+        if (_paused)
+        {
+            using var big = new Font("Segoe UI", CellSize * 1.2f, FontStyle.Bold, GraphicsUnit.Pixel);
+            using var small = new Font("Segoe UI", CellSize * 0.5f, GraphicsUnit.Pixel);
+            g.DrawString("PAUSED", big, Brushes.Black, new RectangleF(0, 0, Width, Height - CellSize * 1.5f), format);
+            g.DrawString("Press P or Esc to carry on", small, Brushes.DimGray, new RectangleF(0, CellSize * 1.5f, Width, Height - CellSize * 1.5f), format);
+            return;
+        }
 
         foreach (int serial in _board.VisibleRows)
         {
@@ -120,6 +184,9 @@ public sealed class EndlessControl : Control
                 }
             }
         }
+
+        if (_board.IsVisibleRow(_cursorRow) && _cursorCol >= 0)
+            BoardControl.DrawHexCursor(g, CellCenter(_cursorRow, _cursorCol), HexRadius, CellSize);
 
         // The bottom edge is the danger line: a row that reaches it ends the run.
         int bar = Math.Max(4, CellSize / 8);

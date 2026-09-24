@@ -282,6 +282,26 @@ public class BoardTests
         return n;
     }
 
+    [Theory]
+    [InlineData(0, 9, 1)]
+    [InlineData(9, 9, 81)]
+    [InlineData(9, 9, -1)]
+    public void ImpossibleBoardsAreRejected(int columns, int rows, int mines)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Board(new Difficulty("Odd", columns, rows, mines)));
+    }
+
+    [Fact]
+    public void BoardWithTooManyMinesForASafeStartIsStillWinnable()
+    {
+        // 3x3 with 8 mines: a safe start clears the whole board, so no mines fit at all.
+        var board = new Board(new Difficulty("Tiny", 3, 3, 8), new Random(1), new BoardRules { SafeStart = true });
+        board.Reveal(1, 1);
+
+        Assert.Equal(0, board.MineCount);
+        Assert.Equal(GameStatus.Won, board.Status);
+    }
+
     private static (int X, int Y) FindCell(Board board, Func<Cell, bool> match,
         Func<Board, Func<int, int, bool>>? extra = null)
     {

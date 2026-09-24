@@ -25,6 +25,9 @@ public sealed class BoardControl : Control
     private bool _leftDown, _rightDown, _middleDown, _chording, _chordDone;
     private int _hoverX = -1, _hoverY = -1;
 
+    // Keyboard cursor. Hidden (-1) until an arrow key is pressed, and hidden again by a mouse click.
+    private int _cursorX = -1, _cursorY = -1;
+
     public BoardControl()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
@@ -79,6 +82,47 @@ public sealed class BoardControl : Control
     {
         _leftDown = _rightDown = _middleDown = _chording = _chordDone = false;
         _hoverX = _hoverY = -1;
+        if (_board == null || !_board.InBounds(_cursorX, _cursorY)) _cursorX = _cursorY = -1;
+    }
+
+    /// <summary>
+    /// Keyboard play: arrows (or WASD) move the cursor, Space/Enter reveals (or chords a revealed number),
+    /// F flags. Returns true if the key was used.
+    /// </summary>
+    public bool HandleKey(Keys key)
+    {
+        if (_board == null) return false;
+
+        (int dx, int dy) = key switch
+        {
+            Keys.Left or Keys.A => (-1, 0),
+            Keys.Right or Keys.D => (1, 0),
+            Keys.Up or Keys.W => (0, -1),
+            Keys.Down or Keys.S => (0, 1),
+            _ => (0, 0),
+        };
+        if (dx != 0 || dy != 0)
+        {
+            if (_cursorX < 0) { _cursorX = _board.Columns / 2; _cursorY = _board.Rows / 2; }
+            else
+            {
+                _cursorX = Math.Clamp(_cursorX + dx, 0, _board.Columns - 1);
+                _cursorY = Math.Clamp(_cursorY + dy, 0, _board.Rows - 1);
+            }
+            Invalidate();
+            return true;
+        }
+
+        if (key is not (Keys.Space or Keys.Enter or Keys.F)) return false;
+        if (_cursorX < 0) { _cursorX = _board.Columns / 2; _cursorY = _board.Rows / 2; }
+
+        if (key == Keys.F) _board.ToggleFlag(_cursorX, _cursorY);
+        else if (_board[_cursorX, _cursorY].State == CellState.Revealed) _board.Chord(_cursorX, _cursorY);
+        else _board.Reveal(_cursorX, _cursorY);
+
+        Invalidate();
+        Changed?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
     private bool CellAt(Point p, out int x, out int y)
@@ -126,6 +170,7 @@ public sealed class BoardControl : Control
     {
         base.OnMouseDown(e);
         if (_board == null) return;
+        _cursorX = _cursorY = -1;
 
         if (e.Button == MouseButtons.Left) _leftDown = true;
         else if (e.Button == MouseButtons.Right) _rightDown = true;
@@ -206,7 +251,7 @@ public sealed class BoardControl : Control
 
         bool pressing = _board.Status is GameStatus.Ready or GameStatus.Playing;
         using var font = new Font("Segoe UI", CellSize * 0.58f, FontStyle.Bold, GraphicsUnit.Pixel);
-        var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        using var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
 
         // While chording, the hovered cell and its neighbors all show as pressed.
         HashSet<(int X, int Y)>? chordArea = null;
@@ -236,6 +281,26 @@ public sealed class BoardControl : Control
                 DrawCell(g, rect, center, _board[x, y], isPressed, _board.IsNumberHidden(x, y), font, format);
             }
         }
+
+        if (_board.InBounds(_cursorX, _cursorY))
+        {
+            if (IsHex) DrawHexCursor(g, HexCenter(_cursorX, _cursorY), HexRadius, CellSize);
+            else DrawSquareCursor(g, new Rectangle(_cursorX * CellSize, _cursorY * CellSize, CellSize, CellSize), CellSize);
+        }
+    }
+
+    internal static readonly Color CursorColor = Color.FromArgb(0, 90, 255);
+
+    internal static void DrawHexCursor(Graphics g, PointF center, float radius, int cellSize)
+    {
+        using var pen = new Pen(CursorColor, Math.Max(2f, cellSize / 10f));
+        g.DrawPolygon(pen, HexCorners(center, radius - pen.Width / 2f));
+    }
+
+    private static void DrawSquareCursor(Graphics g, Rectangle r, int cellSize)
+    {
+        using var pen = new Pen(CursorColor, Math.Max(2f, cellSize / 10f)) { Alignment = PenAlignment.Inset };
+        g.DrawRectangle(pen, r);
     }
 
     private void DrawCell(Graphics g, Rectangle r, PointF center, Cell cell, bool pressed, bool numberHidden, Font font, StringFormat format)

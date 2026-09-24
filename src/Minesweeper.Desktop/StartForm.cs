@@ -11,7 +11,7 @@ public enum GameMode
 }
 
 /// <summary>Start screen. Sets <see cref="Selected"/> and closes when a mode is picked; stays null on exit.</summary>
-public sealed class StartForm : Form
+public sealed class StartForm : Form, ISavesProgress
 {
     private static readonly Color Gray = Color.FromArgb(192, 192, 192);
 
@@ -204,10 +204,12 @@ public sealed class StartForm : Form
     private void SetTileSize(int size)
     {
         _save.TileSize = size;
-        _save.Save(Program.SavePath);
+        SaveProgress();
         for (int i = 0; i < _tileButtons.Length; i++)
             _tileButtons[i].Checked = SaveData.TileSizes[i] == size;
     }
+
+    public void SaveProgress() => Program.Save(_save, Program.SavePath, this);
 
     private void LayoutControls()
     {
