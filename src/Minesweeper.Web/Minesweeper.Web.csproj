@@ -19,4 +19,42 @@
     <ProjectReference Include="..\Minesweeper.Core\Minesweeper.Core.csproj" />
   </ItemGroup>
 
+  <!--
+    Cache-busting. Browsers (and GitHub Pages) may reuse an old copy of js/ms2.js or css/app.css for a while after an
+    update, which can pair new game code with an old script. This gives each file's link in index.html a short hash of
+    its contents ("js/ms2.js?v=1a2b3c4d"), so the link changes exactly when the file does. It runs on every build and
+    only rewrites index.html when a stamp is out of date, so commit index.html when it changes.
+  -->
+  <UsingTask TaskName="StampAssets" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <IndexFile ParameterType="System.String" Required="true" />
+      <Assets ParameterType="System.String[]" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Security.Cryptography" />
+      <Using Namespace="System.Text" />
+      <Using Namespace="System.Text.RegularExpressions" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        string folder = Path.GetDirectoryName(IndexFile);
+        string html = File.ReadAllText(IndexFile);
+        string updated = html;
+        foreach (string asset in Assets)
+        {
+            // Line endings are ignored so a Windows and a Linux checkout give the same stamp.
+            string text = File.ReadAllText(Path.Combine(folder, asset)).Replace("\r", "");
+            string stamp;
+            using (var sha = SHA256.Create())
+                stamp = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(text))).Replace("-", "").Substring(0, 8).ToLowerInvariant();
+            updated = Regex.Replace(updated, Regex.Escape(asset) + @"(\?v=[0-9a-f]+)?", asset + "?v=" + stamp);
+        }
+        if (updated != html) File.WriteAllText(IndexFile, updated, new UTF8Encoding(false));
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="StampIndexHtml" BeforeTargets="BeforeBuild">
+    <StampAssets IndexFile="$(MSBuildProjectDirectory)\wwwroot\index.html" Assets="js/ms2.js;css/app.css" />
+  </Target>
+
 </Project>

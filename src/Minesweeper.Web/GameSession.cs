@@ -115,7 +115,16 @@ public sealed class GameSession
             return;
         }
         _self = DotNetObjectReference.Create(this);
-        Tab = await _js.InvokeAsync<bool>("ms2.tab.start", _self) ? TabState.Playing : TabState.Elsewhere;
+        try
+        {
+            Tab = await _js.InvokeAsync<bool>("ms2.tab.start", _self) ? TabState.Playing : TabState.Elsewhere;
+        }
+        catch (JSException)
+        {
+            // The guard is a safety net. A page with an older ms2.js (cached from before an update) cannot run it,
+            // and that must not stop the game from starting.
+            Tab = TabState.Playing;
+        }
     }
 
     /// <summary>"Play here": the other tab saves and stops, then this one reloads the save it left.</summary>
@@ -124,7 +133,24 @@ public sealed class GameSession
         if (Tab != TabState.Elsewhere) return;
         Tab = TabState.Checking;
         Changed?.Invoke();
-        await _js.InvokeAsync<bool>("ms2.tab.takeOver");
+        try
+        {
+            await _js.InvokeVoidAsync("ms2.tab.takeOver");
+        }
+        catch (JSException) { }
+        BecomePlaying();
+    }
+
+    /// <summary>The playing tab was closed (or handed over): this tab starts by itself.</summary>
+    [JSInvokable]
+    public void OnLockFreed()
+    {
+        if (Tab == TabState.Elsewhere) BecomePlaying();
+    }
+
+    // This tab is now the one playing. Its copy of the save is old, so read the current one.
+    private void BecomePlaying()
+    {
         Tab = TabState.Playing;
         SaveError = null;
         string? player = IsAdmin ? CurrentProfile : Profiles.Find(CurrentProfile);

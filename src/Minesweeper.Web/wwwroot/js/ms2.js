@@ -87,8 +87,11 @@ window.ms2 = {
         lockName: "ms2.playing-tab",
         dotnet: null,
         channel: null,
-        release: null, // lets go of the held lock
-        // Becomes the playing tab unless another tab already is. Browsers without Web Locks are not guarded.
+        release: null, // lets go of the lock while this tab holds it
+        waiting: null, // AbortController of this tab's request that is queued for the lock
+        // Becomes the playing tab unless another tab already is (then it queues for the lock and the game is
+        // told when it arrives). Resolves true to play. Browsers without Web Locks, or where they do not work,
+        // are not guarded: better to play unguarded than not to play.
         start(dotnet) {
             this.dotnet = dotnet;
             if (!navigator.locks) return Promise.resolve(true);
@@ -100,35 +103,57 @@ window.ms2 = {
                     this.dotnet.invokeMethod("OnYield");
                     this.release();
                     this.release = null;
+                    this.wait(); // and queue behind the tab that asked
                 };
             }
-            return this.acquire({ ifAvailable: true });
+            return new Promise(resolve => this.grab({ ifAvailable: true }, resolve)).then(free => {
+                if (!free) this.wait();
+                return free;
+            });
         },
-        // Asks the playing tab to save and let go; takes over anyway if it does not answer (frozen tab).
+        // Queues for the lock. It comes when the playing tab is closed or hands over, and the game is told.
+        wait() {
+            this.waiting = new AbortController();
+            this.grab({ signal: this.waiting.signal }, free => {
+                if (!free) return;
+                this.waiting = null;
+                this.dotnet.invokeMethodAsync("OnLockFreed");
+            });
+        },
+        // "Play here": asks the playing tab to save and let go, and resolves once this tab holds the lock. If the
+        // other tab does not answer within 3 seconds (a frozen tab) the lock is taken from it.
         async takeOver() {
-            if (!navigator.locks) return true;
+            if (!navigator.locks) return;
             this.channel?.postMessage("yield");
-            const wait = new AbortController();
-            const timer = setTimeout(() => wait.abort(), 3000);
-            const got = await this.acquire({ signal: wait.signal });
-            clearTimeout(timer);
-            return got || this.acquire({ steal: true });
+            const deadline = Date.now() + 3000;
+            while (this.waiting && Date.now() < deadline) await new Promise(r => setTimeout(r, 50));
+            if (this.waiting) {
+                this.waiting.abort();
+                this.waiting = null;
+                await new Promise(resolve => this.grab({ steal: true }, resolve));
+            }
         },
-        // Resolves true once the lock is held, or false if it was not available.
-        acquire(options) {
-            return new Promise(resolve => {
-                let held = false;
-                navigator.locks.request(this.lockName, options, lock => {
-                    if (!lock) return resolve(false);
-                    held = true;
-                    resolve(true);
-                    return new Promise(r => this.release = r);
-                }).catch(() => {
-                    if (!held) return resolve(false); // the wait timed out
-                    // Another tab took over without our save (we did not answer in time): stop saving.
+        // Requests the lock and holds it until release() is called. done(true) once it is held (or if locks turn
+        // out to be unusable), done(false) if ifAvailable found it taken.
+        grab(options, done) {
+            let held = false;
+            navigator.locks.request(this.lockName, options, lock => {
+                if (!lock) {
+                    done(false);
+                    return;
+                }
+                held = true;
+                done(true);
+                return new Promise(release => this.release = release);
+            }).catch(e => {
+                if (held) {
+                    // Another tab took the lock without waiting for our save: stop saving, and queue again.
                     this.release = null;
                     this.dotnet.invokeMethodAsync("OnTakenOver");
-                });
+                    this.wait();
+                } else if (!e || e.name !== "AbortError") {
+                    done(true); // the request itself failed, so there is no guard to obey
+                }
             });
         },
     },
