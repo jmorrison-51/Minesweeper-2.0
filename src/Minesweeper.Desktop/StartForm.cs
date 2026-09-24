@@ -23,7 +23,12 @@ public sealed class StartForm : Form
     private readonly ModeButton[] _tileButtons;
     private readonly SaveData _save;
 
+    private readonly ModeButton _switchPlayer = new("Switch Player", null);
+
     public GameMode? Selected { get; private set; }
+
+    /// <summary>True when the player asked to go back to the "Who's playing?" screen.</summary>
+    public bool SwitchPlayer { get; private set; }
 
     public StartForm()
     {
@@ -37,11 +42,13 @@ public sealed class StartForm : Form
         _title.Text = "MINESWEEPER 2.0";
         _title.TextAlign = ContentAlignment.MiddleCenter;
         _title.Font = new Font("Segoe UI", 22f, FontStyle.Bold);
-        _subtitle.Text = "Choose a game";
+        _subtitle.Text = Program.IsAdmin
+            ? "Signed in as admin (test mode) - choose a game"
+            : $"Playing as {Program.CurrentProfile} - choose a game";
         _subtitle.TextAlign = ContentAlignment.MiddleCenter;
         _subtitle.Font = new Font("Segoe UI", 10f);
 
-        _save = SaveData.Load(Program.SavePath);
+        _save = Program.LoadSave();
         if (!SaveData.TileSizes.Contains(_save.TileSize)) _save.TileSize = 48;
 
         // Endless Mode stays locked, and darker, until every Hex Challenge level is cleared without flags.
@@ -70,6 +77,11 @@ public sealed class StartForm : Form
         ];
         _exit = new ModeButton("Exit", null);
         _exit.Click += (_, _) => Close();
+        _switchPlayer.Click += (_, _) =>
+        {
+            SwitchPlayer = true;
+            Close();
+        };
 
         _tileLabel.Text = "Tile size";
         _tileLabel.TextAlign = ContentAlignment.MiddleCenter;
@@ -86,6 +98,7 @@ public sealed class StartForm : Form
         Controls.AddRange(_buttons);
         Controls.Add(_tileLabel);
         Controls.AddRange(_tileButtons);
+        Controls.Add(_switchPlayer);
         Controls.Add(_exit);
 
         LayoutControls();
@@ -137,7 +150,9 @@ public sealed class StartForm : Form
             _tileButtons[i].SetBounds(pad + i * (tileWidth + tileGap), y, tileWidth, LogicalToDeviceUnits(36));
         y += LogicalToDeviceUnits(36) + gap * 2;
 
-        _exit.SetBounds(pad + width / 3, y, width / 3, LogicalToDeviceUnits(34));
+        int half = (width - gap) / 2;
+        _switchPlayer.SetBounds(pad, y, half, LogicalToDeviceUnits(40));
+        _exit.SetBounds(pad + half + gap, y, half, LogicalToDeviceUnits(40));
 
         ClientSize = new Size(width + 2 * pad, _exit.Bottom + pad);
     }

@@ -33,7 +33,7 @@ public sealed class EndlessForm : Form
         DoubleBuffered = true;
         Icon = SystemIcons.Application;
 
-        _save = SaveData.Load(Program.SavePath);
+        _save = Program.LoadSave();
 
         var game = new ToolStripMenuItem("&Game");
         game.DropDownItems.Add(MenuItem("&New", Keys.F2, NewGame));

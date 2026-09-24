@@ -48,7 +48,7 @@ public sealed class MainForm : Form
         DoubleBuffered = true;
         Icon = SystemIcons.Application;
 
-        _save = SaveData.Load(_savePath);
+        _save = Program.LoadSave();
         _difficulty = (_shape == BoardShape.Hex ? _save.LastHexDifficulty : _save.LastDifficulty) switch
         {
             "Intermediate" => Difficulty.Intermediate,

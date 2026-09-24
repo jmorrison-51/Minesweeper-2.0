@@ -47,8 +47,12 @@ public sealed class SaveData
     [JsonIgnore]
     public int FlaglessLevelCount => ChallengeFlaglessLevels.Where(l => l is >= 1 and <= ChallengeLevel.Count).Distinct().Count();
 
+    /// <summary>Set at runtime (never saved) when signed in as admin, which unlocks Endless Mode for testing.</summary>
     [JsonIgnore]
-    public bool EndlessUnlocked => FlaglessLevelCount == ChallengeLevel.Count;
+    public bool AdminUnlock { get; set; }
+
+    [JsonIgnore]
+    public bool EndlessUnlocked => AdminUnlock || FlaglessLevelCount == ChallengeLevel.Count;
 
     // Endless Mode records: longest run in milliseconds, and the most rows cleared in a run.
     public long EndlessBestMs { get; set; }
@@ -77,12 +81,20 @@ public sealed class SaveData
         return true;
     }
 
+    /// <summary>
+    /// Loads an encrypted save. A missing file gives fresh data. A file that is not a valid save (edited,
+    /// corrupted, or plain text) is copied to "&lt;name&gt;.invalid" and fresh data is returned.
+    /// </summary>
     public static SaveData Load(string path)
     {
         try
         {
             if (File.Exists(path))
-                return JsonSerializer.Deserialize<SaveData>(File.ReadAllText(path)) ?? new SaveData();
+            {
+                if (SaveCrypto.TryDecrypt(File.ReadAllBytes(path), out byte[] json))
+                    return JsonSerializer.Deserialize<SaveData>(json) ?? new SaveData();
+                KeepUnreadableCopy(path);
+            }
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
@@ -90,12 +102,43 @@ public sealed class SaveData
         return new SaveData();
     }
 
+    /// <summary>Like <see cref="Load"/> but also accepts the old plain-text format. Only for the one-time upgrade.</summary>
+    public static SaveData LoadAny(string path)
+    {
+        try
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+            if (SaveCrypto.TryDecrypt(bytes, out byte[] json)) bytes = json;
+            return JsonSerializer.Deserialize<SaveData>(bytes) ?? new SaveData();
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return new SaveData();
+        }
+    }
+
     public void Save(string path)
     {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+            byte[] data = SaveCrypto.Encrypt(JsonSerializer.SerializeToUtf8Bytes(this));
+
+            // Write beside the file and swap it in, so a crash mid-write cannot leave a broken save.
+            string temp = path + ".tmp";
+            File.WriteAllBytes(temp, data);
+            File.Move(temp, path, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void KeepUnreadableCopy(string path)
+    {
+        try
+        {
+            File.Copy(path, path + ".invalid", overwrite: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
