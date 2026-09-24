@@ -23,10 +23,18 @@ static class Program
 
     public static string SavePath => Profiles.PathFor(IsAdmin ? AdminAccess.UserName : CurrentProfile);
 
+    // Each screen loads the save itself, so the notice is shown once per sign-in, not once per screen.
+    private static bool _loadNoticeShown;
+
     public static SaveData LoadSave()
     {
         var save = SaveData.Load(SavePath);
         save.AdminUnlock = IsAdmin;
+        if (save.LoadNotice != null && !_loadNoticeShown)
+        {
+            _loadNoticeShown = true;
+            MessageBox.Show(save.LoadNotice, "Minesweeper 2.0 - Save File", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
         return save;
     }
 
@@ -122,6 +130,7 @@ static class Program
 
                 CurrentProfile = chosen.Name;
                 IsAdmin = chosen.IsAdmin;
+                _loadNoticeShown = false;
                 if (!IsAdmin) Profiles.LastProfile = chosen.Name;
                 signedIn = true;
             }

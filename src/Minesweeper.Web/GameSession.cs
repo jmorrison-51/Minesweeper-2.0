@@ -60,6 +60,40 @@ public sealed class GameSession
 
     public bool SaveWarningDismissed { get; set; }
 
+    /// <summary>Set when the player's saved data was damaged and could not be used, so the page can say so.</summary>
+    public string? LoadNotice { get; private set; }
+
+    public bool LoadNoticeDismissed { get; set; }
+
+    private void ShowLoadNotice()
+    {
+        LoadNotice = Save.LoadNotice;
+        LoadNoticeDismissed = false;
+    }
+
+    private bool _persistAsked;
+
+    // Once per visit, when someone signs in (so it happens when there is something worth keeping): ask the
+    // browser not to clear the saved data. A page with an older copy of ms2.js cannot answer; that is fine.
+    private async Task AskForPersistentStorage()
+    {
+        if (_persistAsked || !StorageAvailable) return;
+        _persistAsked = true;
+        try
+        {
+            await _js.InvokeAsync<bool>("ms2.storage.persist");
+        }
+        catch (JSException) { }
+    }
+
+    /// <summary>Offers every player in this browser as a backup file download.</summary>
+    public bool DownloadBackup()
+    {
+        if (Profiles.List().Count == 0) return false;
+        _js.InvokeVoid("ms2.file.download", $"minesweeper-2-backup-{DateTime.Now:yyyy-MM-dd}.txt", Profiles.ExportBackup());
+        return true;
+    }
+
     /// <summary>Raised when the screen, player or save warning changes, so the page re-renders.</summary>
     public event Action? Changed;
 
@@ -98,6 +132,7 @@ public sealed class GameSession
         {
             CurrentProfile = player;
             Save = Profiles.Load(CurrentProfile);
+            ShowLoadNotice();
             Save.AdminUnlock = IsAdmin;
             Show(Screen.Start);
         }
@@ -132,8 +167,10 @@ public sealed class GameSession
         CurrentProfile = isAdmin ? AdminAccess.UserName : name;
         IsAdmin = isAdmin;
         Save = Profiles.Load(CurrentProfile);
+        ShowLoadNotice();
         Save.AdminUnlock = isAdmin;
         if (!isAdmin) Profiles.LastProfile = name;
+        _ = AskForPersistentStorage();
         Show(Screen.Start);
     }
 

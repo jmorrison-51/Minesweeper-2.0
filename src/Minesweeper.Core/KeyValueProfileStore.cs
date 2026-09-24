@@ -90,8 +90,10 @@ public sealed class KeyValueProfileStore
     {
         string? stored = Find(name);
         if (stored == null) return;
+        bool wasLast = string.Equals(LastProfile, stored, StringComparison.OrdinalIgnoreCase); // before they are gone
         _store.Remove(KeyFor(stored));
-        if (string.Equals(LastProfile, stored, StringComparison.OrdinalIgnoreCase)) LastProfile = null;
+        for (int copy = 1; copy <= MaxDamagedCopies; copy++) _store.Remove(DamagedKey(stored, copy));
+        if (wasLast) LastProfile = null;
     }
 
     /// <summary>
@@ -104,8 +106,82 @@ public sealed class KeyValueProfileStore
         if (Entry(key) is not { } entry) return new SaveData();
         if (SaveData.TryFromSignedText(entry.Save, out SaveData save)) return save;
 
-        _store.TrySet(InvalidPrefix + name.Trim().ToLowerInvariant(), entry.Save, out _);
-        return new SaveData();
+        KeepDamagedCopy(name, entry.Save);
+        return new SaveData { LoadStatus = SaveLoadStatus.Rejected, LoadNotice = SaveData.RejectedNotice };
+    }
+
+    private const int MaxDamagedCopies = 5;
+
+    // Names cannot contain a dot, so "alice.2" never collides with another player's key.
+    private static string DamagedKey(string name, int copy) =>
+        InvalidPrefix + name.Trim().ToLowerInvariant() + (copy == 1 ? "" : "." + copy);
+
+    // Sets a damaged save aside without overwriting an earlier one, and without copying the same text twice
+    // (every load of a still-damaged save would otherwise make another).
+    private void KeepDamagedCopy(string name, string damaged)
+    {
+        for (int copy = 1; copy <= MaxDamagedCopies; copy++)
+        {
+            string? existing = _store.Get(DamagedKey(name, copy));
+            if (existing == damaged) return;
+            if (existing == null)
+            {
+                _store.TrySet(DamagedKey(name, copy), damaged, out _);
+                return;
+            }
+        }
+    }
+
+    private const string BackupHeader = "MS2BACKUP1";
+
+    /// <summary>
+    /// Every player's save as one block of text (a header, then one "name, tab, signed save" line each), to keep
+    /// safe in case the browser loses its storage. Saves that are already damaged are left out.
+    /// </summary>
+    public string ExportBackup()
+    {
+        var text = new System.Text.StringBuilder(BackupHeader).Append('\n');
+        foreach (string name in List())
+            if (Entry(KeyFor(name)) is { } entry && SaveData.TryFromSignedText(entry.Save, out _))
+                text.Append(entry.Name).Append('\t').Append(entry.Save).Append('\n');
+        return text.ToString();
+    }
+
+    /// <summary>What <see cref="ImportBackup"/> did. Players who already exist are never overwritten.</summary>
+    public sealed record BackupImport(bool Recognized, int Added, int AlreadyThere, int Damaged, bool StorageFull);
+
+    /// <summary>
+    /// Adds the players from <see cref="ExportBackup"/> text. Anything edited, misnamed or damaged is skipped,
+    /// and a player who already exists is left as they are, so a restore cannot destroy newer progress.
+    /// </summary>
+    public BackupImport ImportBackup(string text)
+    {
+        var lines = text.Replace("\r", "").Split('\n');
+        if (lines[0].Trim() != BackupHeader) return new BackupImport(false, 0, 0, 0, false);
+
+        int added = 0, existing = 0, damaged = 0;
+        foreach (string line in lines.Skip(1))
+        {
+            if (line.Length == 0) continue;
+            int tab = line.IndexOf('\t');
+            string name = tab < 0 ? "" : line[..tab];
+            string signed = tab < 0 ? "" : line[(tab + 1)..];
+
+            if (name != name.Trim() || !ProfileStore.IsValidName(name, out _) || !SaveData.TryFromSignedText(signed, out _))
+            {
+                damaged++;
+                continue;
+            }
+            if (Find(name) != null)
+            {
+                existing++;
+                continue;
+            }
+            if (!_store.TrySet(KeyFor(name), name + "\n" + signed, out _))
+                return new BackupImport(true, added, existing, damaged, StorageFull: true);
+            added++;
+        }
+        return new BackupImport(true, added, existing, damaged, false);
     }
 
     public bool TrySave(string name, SaveData save, out string error)

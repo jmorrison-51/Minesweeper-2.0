@@ -71,8 +71,9 @@ public sealed class ProfileStore
     {
         string? stored = Find(name);
         if (stored == null) return;
-        File.Delete(PathFor(stored));
-        if (string.Equals(LastProfile, stored, StringComparison.OrdinalIgnoreCase)) LastProfile = null;
+        bool wasLast = string.Equals(LastProfile, stored, StringComparison.OrdinalIgnoreCase); // before they are gone
+        SaveData.DeleteWithCompanions(PathFor(stored));
+        if (wasLast) LastProfile = null;
     }
 
     /// <summary>The player chosen last time, if they still exist.</summary>

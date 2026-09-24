@@ -22,6 +22,7 @@
             <button class="mode-button small" disabled="@(_selected == null)" @onclick="() => Play(_selected)">Play</button>
             <button class="mode-button small" @onclick="ShowNew">New Player...</button>
             <button class="mode-button small" disabled="@(_selected == null)" @onclick="() => _confirmDelete = true">Delete</button>
+            <button class="mode-button small" @onclick="ShowBackup">Backup...</button>
         </div>
         <p class="note">Players and scores are kept in this browser only.</p>
     </div>
@@ -51,6 +52,27 @@
             <button class="button" @onclick="Create">OK</button>
             <button class="button" @onclick="() => _showNew = false">Cancel</button>
         </Buttons>
+    </Dialog>
+}
+
+@if (_showBackup)
+{
+    <Dialog Title="Backup and Restore" OnDismiss="() => _showBackup = false">
+        <ChildContent>
+            <p>
+                Your players and scores live in this browser only. Clearing the browser's data, or a browser
+                that tidies up when it is short of space, would erase them. A backup file keeps a copy you can
+                restore later, or move to another browser.
+            </p>
+            <p><button class="button" @onclick="Download">Download a backup file</button></p>
+            <p>Restore from a backup file (players already here are left as they are):</p>
+            <p><InputFile OnChange="Restore" accept=".txt,text/plain" /></p>
+            @if (_backupMessage.Length > 0)
+            {
+                <p class="pre" role="status">@_backupMessage</p>
+            }
+        </ChildContent>
+        <Buttons><button class="button" @onclick="() => _showBackup = false">Close</button></Buttons>
     </Dialog>
 }
 
@@ -144,6 +166,67 @@
         {
             _error = ex.Message;
         }
+    }
+
+    private bool _showBackup;
+    private string _backupMessage = "";
+    private const long MaxBackupBytes = 1_000_000;
+
+    private void ShowBackup()
+    {
+        _backupMessage = "";
+        _showBackup = true;
+    }
+
+    private void Download()
+    {
+        try
+        {
+            _backupMessage = Session.DownloadBackup()
+                ? "The backup file was downloaded. Keep it somewhere safe."
+                : "There are no players to back up yet.";
+        }
+        catch (JSException)
+        {
+            _backupMessage = "The page needs to be reloaded before it can make a backup. Reload it and try again.";
+        }
+    }
+
+    private async Task Restore(InputFileChangeEventArgs e)
+    {
+        string text;
+        try
+        {
+            if (e.File.Size > MaxBackupBytes)
+            {
+                _backupMessage = "That file is too big to be a backup.";
+                return;
+            }
+            using var reader = new StreamReader(e.File.OpenReadStream(MaxBackupBytes));
+            text = await reader.ReadToEndAsync();
+        }
+        catch (IOException)
+        {
+            _backupMessage = "That file could not be read.";
+            return;
+        }
+
+        var result = Session.Profiles.ImportBackup(text);
+        if (!result.Recognized)
+        {
+            _backupMessage = "That is not a Minesweeper 2.0 backup file.";
+            return;
+        }
+
+        var parts = new List<string> { $"Restored {result.Added} player{(result.Added == 1 ? "" : "s")}." };
+        if (result.AlreadyThere > 0)
+            parts.Add($"{result.AlreadyThere} already here, left as they are (delete a player first to restore over them).");
+        if (result.Damaged > 0)
+            parts.Add($"{result.Damaged} could not be used (damaged or edited).");
+        if (result.StorageFull)
+            parts.Add("The browser has no room for more.");
+        _backupMessage = string.Join(" ", parts);
+        Reload(_selected);
     }
 
     private void Delete()

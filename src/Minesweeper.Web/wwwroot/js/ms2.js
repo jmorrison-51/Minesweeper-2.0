@@ -23,6 +23,30 @@ window.ms2 = {
             }
         },
         remove: key => localStorage.removeItem(key),
+        // Asks the browser not to clear this site's data when it is short of space. Some browsers ask the
+        // player first, others decide quietly; either way the answer only matters to the browser.
+        async persist() {
+            try {
+                if (!navigator.storage || !navigator.storage.persist) return false;
+                return (await navigator.storage.persisted()) || (await navigator.storage.persist());
+            } catch {
+                return false;
+            }
+        },
+    },
+
+    file: {
+        // Offers text to the player as a downloaded file.
+        download(name, text) {
+            const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = name;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
+        },
     },
 
     // Game keys go to the current screen, except while typing in a field or when a dialog is open.
