@@ -34,6 +34,12 @@ public sealed class Board
     public int MineCount { get; }
     public GameStatus Status { get; private set; } = GameStatus.Ready;
     public int FlagCount { get; private set; }
+
+    /// <summary>
+    /// Flags the player has put down this game, including ones they later removed. The automatic
+    /// flags added to every mine on a win are not counted. Used for "cleared without flags".
+    /// </summary>
+    public int FlagsPlaced { get; private set; }
     public int MinesRemaining => MineCount - FlagCount;
     public int FlagsRemaining => Math.Max(0, FlagLimit - FlagCount);
 
@@ -108,6 +114,7 @@ public sealed class Board
                 if (FlagCount >= FlagLimit) return;
                 cell.State = CellState.Flagged;
                 FlagCount++;
+                FlagsPlaced++;
                 break;
             case CellState.Flagged:
                 cell.State = CellState.Hidden;

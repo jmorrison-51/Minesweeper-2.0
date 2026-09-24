@@ -7,6 +7,7 @@ public enum GameMode
     Classic,
     Hex,
     HexChallenge,
+    Endless,
 }
 
 /// <summary>Start screen. Sets <see cref="Selected"/> and closes when a mode is picked; stays null on exit.</summary>
@@ -40,17 +41,36 @@ public sealed class StartForm : Form
         _subtitle.TextAlign = ContentAlignment.MiddleCenter;
         _subtitle.Font = new Font("Segoe UI", 10f);
 
+        _save = SaveData.Load(Program.SavePath);
+        if (!SaveData.TileSizes.Contains(_save.TileSize)) _save.TileSize = 48;
+
+        // Endless Mode stays locked, and darker, until every Hex Challenge level is cleared without flags.
+        bool endlessUnlocked = _save.EndlessUnlocked;
+        var endless = new ModeButton(
+            endlessUnlocked ? "Endless Mode" : "Beat Hex Challenge without using any flags",
+            endlessUnlocked
+                ? "Rows keep sliding down. Clear them before they reach the bottom."
+                : $"{_save.FlaglessLevelCount} of {ChallengeLevel.Count} levels cleared without flags")
+        {
+            Locked = !endlessUnlocked,
+        };
+        endless.Click += (_, _) =>
+        {
+            if (!endlessUnlocked) return;
+            Selected = GameMode.Endless;
+            Close();
+        };
+
         _buttons =
         [
             Create("Minesweeper Original", "The classic square grid. Beginner, Intermediate, Expert or Custom.", GameMode.Classic),
             Create("Hex Minesweeper", "Hexagonal tiles, six neighbors each. Beginner, Intermediate, Expert or Custom.", GameMode.Hex),
             Create("Hex Challenge", "20 levels of rising difficulty with mystery tiles and a shrinking flag budget.", GameMode.HexChallenge),
+            endless,
         ];
         _exit = new ModeButton("Exit", null);
         _exit.Click += (_, _) => Close();
 
-        _save = SaveData.Load(Program.SavePath);
-        if (!SaveData.TileSizes.Contains(_save.TileSize)) _save.TileSize = 48;
         _tileLabel.Text = "Tile size";
         _tileLabel.TextAlign = ContentAlignment.MiddleCenter;
         _tileLabel.Font = new Font("Segoe UI", 10f);
@@ -131,6 +151,20 @@ public sealed class ModeButton : Control
     private bool _hover;
     private bool _pressed;
     private bool _checked;
+    private bool _locked;
+
+    /// <summary>Drawn slightly darker and without hover or press feedback. The owner decides what a click does.</summary>
+    public bool Locked
+    {
+        get => _locked;
+        set
+        {
+            if (_locked == value) return;
+            _locked = value;
+            Cursor = value ? Cursors.Default : Cursors.Hand;
+            Invalidate();
+        }
+    }
 
     /// <summary>Toggle-style state: drawn sunken, used for the current tile size.</summary>
     public bool Checked
@@ -155,14 +189,14 @@ public sealed class ModeButton : Control
         Cursor = Cursors.Hand;
     }
 
-    protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
+    protected override void OnMouseEnter(EventArgs e) { _hover = !_locked; Invalidate(); base.OnMouseEnter(e); }
     protected override void OnMouseLeave(EventArgs e) { _hover = false; _pressed = false; Invalidate(); base.OnMouseLeave(e); }
     protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
     protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
-        if (e.Button == MouseButtons.Left) { Focus(); _pressed = true; Invalidate(); }
+        if (e.Button == MouseButtons.Left) { Focus(); _pressed = !_locked; Invalidate(); }
         base.OnMouseDown(e);
     }
 
@@ -184,7 +218,10 @@ public sealed class ModeButton : Control
     {
         var g = e.Graphics;
         bool down = _pressed || _checked;
-        g.Clear(_checked ? Color.FromArgb(160, 160, 160) : _hover ? Color.FromArgb(208, 208, 208) : Color.FromArgb(192, 192, 192));
+        g.Clear(_checked ? Color.FromArgb(160, 160, 160)
+            : _locked ? Color.FromArgb(172, 172, 172)
+            : _hover ? Color.FromArgb(208, 208, 208)
+            : Color.FromArgb(192, 192, 192));
 
         var bounds = new Rectangle(0, 0, Width, Height);
         ControlPaint.DrawBorder3D(g, bounds, down ? Border3DStyle.SunkenInner : Border3DStyle.Raised);
@@ -193,7 +230,15 @@ public sealed class ModeButton : Control
         var inner = Rectangle.Inflate(bounds, -pad, -LogicalToDeviceUnits(6));
         if (down) inner.Offset(1, 1);
 
-        using var titleFont = new Font("Segoe UI", 13f, FontStyle.Bold);
+        // Long titles shrink until they fit on one line.
+        float titleSize = 13f;
+        var titleFont = new Font("Segoe UI", titleSize, FontStyle.Bold);
+        while (titleSize > 9f && TextRenderer.MeasureText(g, _title, titleFont).Width > inner.Width)
+        {
+            titleFont.Dispose();
+            titleSize -= 0.5f;
+            titleFont = new Font("Segoe UI", titleSize, FontStyle.Bold);
+        }
         using var descFont = new Font("Segoe UI", 9f);
         var titleFlags = TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding;
 
@@ -210,6 +255,8 @@ public sealed class ModeButton : Control
             TextRenderer.DrawText(g, _description, descFont, descRect, Color.FromArgb(64, 64, 64),
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.WordBreak | TextFormatFlags.NoPadding);
         }
+
+        titleFont.Dispose();
 
         if (Focused && ShowFocusCues)
             ControlPaint.DrawFocusRectangle(g, Rectangle.Inflate(bounds, -4, -4));

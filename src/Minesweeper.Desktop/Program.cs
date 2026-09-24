@@ -18,6 +18,12 @@ static class Program
 
             switch (mode)
             {
+                case GameMode.Endless:
+                    var endless = new EndlessForm();
+                    Application.Run(endless);
+                    if (!endless.ReturnToMenu) return;
+                    break;
+
                 default:
                     var game = new MainForm(mode);
                     Application.Run(game);

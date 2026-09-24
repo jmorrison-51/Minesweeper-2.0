@@ -35,16 +35,17 @@ public sealed class LevelSelectDialog : Form
         {
             int n = level;
             string best = save.BestTimesMs.TryGetValue(SaveData.ChallengeKey(n), out long ms) ? $"\n{ms / 1000.0:0.0}s" : "";
+            bool flagless = save.IsFlaglessCleared(n);
             var button = new Button
             {
-                Text = n.ToString() + best,
+                Text = n + (flagless ? " ★" : "") + best,
                 Size = new Size(buttonWidth, buttonHeight),
                 Margin = new Padding(margin),
                 Enabled = n <= save.ChallengePlayable,
                 Font = new Font(Font, n == current ? FontStyle.Bold : FontStyle.Regular),
             };
             tips.SetToolTip(button, n <= save.ChallengePlayable
-                ? $"Level {n}: {ChallengeLevel.Get(n).Summary}"
+                ? $"Level {n}: {ChallengeLevel.Get(n).Summary}" + (flagless ? "\nCleared without flags" : "")
                 : $"Level {n}: locked. Clear level {n - 1} first.");
             button.Click += (_, _) =>
             {
@@ -63,6 +64,12 @@ public sealed class LevelSelectDialog : Form
             Padding = new Padding(padding - margin, 6, padding - margin, 0),
         };
         footer.Controls.Add(cancel);
+        footer.Controls.Add(new Label
+        {
+            Text = $"★ cleared without flags: {save.FlaglessLevelCount} of {ChallengeLevel.Count}",
+            AutoSize = true,
+            Margin = new Padding(8, 8, 0, 0),
+        });
 
         Controls.Add(grid);
         Controls.Add(footer);

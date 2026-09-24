@@ -33,6 +33,36 @@ public sealed class SaveData
 
     public static string ChallengeKey(int level) => ChallengeLevel.Get(level).Difficulty.Key;
 
+    // Levels cleared without the player ever placing a flag. Clearing all 20 unlocks Endless Mode.
+    public List<int> ChallengeFlaglessLevels { get; set; } = new();
+
+    public bool IsFlaglessCleared(int level) => ChallengeFlaglessLevels.Contains(level);
+
+    public void MarkFlaglessClear(int level)
+    {
+        if (level is >= 1 and <= ChallengeLevel.Count && !ChallengeFlaglessLevels.Contains(level))
+            ChallengeFlaglessLevels.Add(level);
+    }
+
+    [JsonIgnore]
+    public int FlaglessLevelCount => ChallengeFlaglessLevels.Where(l => l is >= 1 and <= ChallengeLevel.Count).Distinct().Count();
+
+    [JsonIgnore]
+    public bool EndlessUnlocked => FlaglessLevelCount == ChallengeLevel.Count;
+
+    // Endless Mode records: longest run in milliseconds, and the most rows cleared in a run.
+    public long EndlessBestMs { get; set; }
+    public int EndlessBestRows { get; set; }
+
+    /// <summary>Records a finished Endless run. Returns true if it is a new longest run.</summary>
+    public bool RecordEndlessRun(long survivedMs, int rowsCleared)
+    {
+        EndlessBestRows = Math.Max(EndlessBestRows, rowsCleared);
+        if (survivedMs <= EndlessBestMs) return false;
+        EndlessBestMs = survivedMs;
+        return true;
+    }
+
     public int CustomColumns { get; set; } = 16;
     public int CustomRows { get; set; } = 16;
     public int CustomMines { get; set; } = 40;

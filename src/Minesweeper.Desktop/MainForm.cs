@@ -282,10 +282,19 @@ public sealed class MainForm : Form
         int cleared = _level;
         bool newBest = _save.TrySetBestTime(_difficulty.Key, ms);
         int? next = _save.CompleteChallengeLevel(cleared);
+
+        // Only flags the player placed count; the ones the game adds to every mine on a win do not.
+        bool flagless = _board.FlagsPlaced == 0;
+        bool endlessWasUnlocked = _save.EndlessUnlocked;
+        if (flagless) _save.MarkFlaglessClear(cleared);
+        bool endlessJustUnlocked = !endlessWasUnlocked && _save.EndlessUnlocked;
+
         _save.Save(_savePath);
         _nextLevelItem.Enabled = _level < _save.ChallengePlayable;
 
         string message = $"Level {cleared} cleared in {ms / 1000.0:0.00} seconds" + (newBest ? " - a new best!" : ".");
+        if (flagless) message += $"\nNo flags used! ({_save.FlaglessLevelCount} of {ChallengeLevel.Count} levels flagless)";
+        if (endlessJustUnlocked) message += "\n\nEndless Mode is unlocked. Find it on the main menu!";
         BeginInvoke(() =>
         {
             if (next is int n)

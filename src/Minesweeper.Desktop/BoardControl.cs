@@ -5,10 +5,10 @@ namespace Minesweeper.Desktop;
 
 public sealed class BoardControl : Control
 {
-    private static readonly Color Face = Color.FromArgb(192, 192, 192);
-    private static readonly Color Light = Color.White;
-    private static readonly Color Shadow = Color.FromArgb(128, 128, 128);
-    private static readonly Color[] NumberColors =
+    internal static readonly Color Face = Color.FromArgb(192, 192, 192);
+    internal static readonly Color Light = Color.White;
+    internal static readonly Color Shadow = Color.FromArgb(128, 128, 128);
+    internal static readonly Color[] NumberColors =
     {
         Color.Empty,
         Color.FromArgb(0, 0, 255),
@@ -245,7 +245,7 @@ public sealed class BoardControl : Control
 
         if (IsHex)
         {
-            DrawHexBackground(g, center, raised, cell.Exploded);
+            DrawHexBackground(g, center, HexRadius, CellSize, raised, cell.Exploded);
         }
         else if (raised)
         {
@@ -272,7 +272,7 @@ public sealed class BoardControl : Control
         {
             if (lost && !cell.IsMine)
             {
-                DrawMine(g, r);
+                DrawMine(g, r, CellSize);
                 using var cross = new Pen(Color.Red, Math.Max(2f, CellSize / 10f));
                 g.DrawLine(cross, r.Left + 4, r.Top + 4, r.Right - 4, r.Bottom - 4);
                 g.DrawLine(cross, r.Left + 4, r.Bottom - 4, r.Right - 4, r.Top + 4);
@@ -284,7 +284,7 @@ public sealed class BoardControl : Control
         }
         else if (cell.State == CellState.Revealed)
         {
-            if (cell.IsMine) DrawMine(g, r);
+            if (cell.IsMine) DrawMine(g, r, CellSize);
             else if (numberHidden)
             {
                 DrawMystery(g, r, font, format);
@@ -308,7 +308,7 @@ public sealed class BoardControl : Control
         g.Restore(state);
     }
 
-    private static PointF[] HexCorners(PointF c, float radius)
+    internal static PointF[] HexCorners(PointF c, float radius)
     {
         var pts = new PointF[6];
         for (int i = 0; i < 6; i++)
@@ -319,9 +319,9 @@ public sealed class BoardControl : Control
         return pts;
     }
 
-    private void DrawHexBackground(Graphics g, PointF center, bool raised, bool exploded)
+    // Shared with EndlessControl, which draws the same tiles.
+    internal static void DrawHexBackground(Graphics g, PointF center, float radius, int cellSize, bool raised, bool exploded)
     {
-        float radius = HexRadius;
         using (var b = new SolidBrush(exploded && !raised ? Color.Red : Face))
             g.FillPolygon(b, HexCorners(center, radius));
 
@@ -334,7 +334,7 @@ public sealed class BoardControl : Control
 
         // Corners run clockwise from the top and edge i joins corner i to i+1. Edges 0, 4 and 5 face
         // up/left and are lit; edges 1, 2 and 3 face down/right and are in shadow.
-        float bevel = Math.Max(2f, CellSize / 9f);
+        float bevel = Math.Max(2f, cellSize / 9f);
         var pts = HexCorners(center, radius - bevel / 2f);
         using var light = new Pen(Light, bevel) { StartCap = LineCap.Round, EndCap = LineCap.Round };
         using var dark = new Pen(Shadow, bevel) { StartCap = LineCap.Round, EndCap = LineCap.Round };
@@ -359,12 +359,12 @@ public sealed class BoardControl : Control
         });
     }
 
-    private void DrawMine(Graphics g, Rectangle r)
+    internal static void DrawMine(Graphics g, Rectangle r, int cellSize)
     {
         float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
-        float radius = CellSize * 0.26f;
+        float radius = cellSize * 0.26f;
         using var black = new SolidBrush(Color.Black);
-        using var spike = new Pen(Color.Black, Math.Max(1.5f, CellSize / 12f));
+        using var spike = new Pen(Color.Black, Math.Max(1.5f, cellSize / 12f));
 
         float reach = radius * 1.6f;
         g.DrawLine(spike, cx - reach, cy, cx + reach, cy);
