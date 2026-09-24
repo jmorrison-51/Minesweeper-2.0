@@ -27,6 +27,8 @@ public sealed class MainForm : Form
     /// <summary>True when the form was closed to go back to the start screen rather than to quit.</summary>
     public bool ReturnToMenu { get; private set; }
 
+    private const int TileSize = 48;
+
     private readonly BoardShape _shape;
 
     public MainForm(BoardShape shape = BoardShape.Square)
@@ -36,6 +38,7 @@ public sealed class MainForm : Form
         BackColor = Gray;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
+        StartPosition = FormStartPosition.CenterScreen;
         DoubleBuffered = true;
         Icon = SystemIcons.Application;
 
@@ -138,8 +141,21 @@ public sealed class MainForm : Form
         _bestTimeRecorded = false;
 
         _board = new Board(_difficulty);
-        _boardControl.ApplyScale(LogicalToDeviceUnits(24));
         _boardControl.Board = _board;
+
+        // Tiles start at TileSize and shrink only if the window would not fit the screen.
+        var area = Screen.FromControl(this).WorkingArea;
+        int cell = LogicalToDeviceUnits(TileSize);
+        while (true)
+        {
+            _boardControl.ApplyScale(cell);
+            LayoutControls();
+            if ((Width <= area.Width && Height <= area.Height) || cell <= LogicalToDeviceUnits(16)) break;
+            cell -= 2;
+        }
+        Location = new Point(
+            Math.Max(area.Left, Math.Min(Left, area.Right - Width)),
+            Math.Max(area.Top, Math.Min(Top, area.Bottom - Height)));
 
         if (_shape == BoardShape.Hex) _save.LastHexDifficulty = _difficulty.Name;
         else _save.LastDifficulty = _difficulty.Name;
