@@ -57,6 +57,58 @@ window.ms2 = {
         },
     },
 
+    // Only one tab plays at a time, like the desktop's single instance: each tab keeps its own copy of the
+    // save, so two playing tabs would wipe out each other's progress. The playing tab holds a Web Lock.
+    tab: {
+        lockName: "ms2.playing-tab",
+        dotnet: null,
+        channel: null,
+        release: null, // lets go of the held lock
+        // Becomes the playing tab unless another tab already is. Browsers without Web Locks are not guarded.
+        start(dotnet) {
+            this.dotnet = dotnet;
+            if (!navigator.locks) return Promise.resolve(true);
+            if (window.BroadcastChannel) {
+                this.channel = new BroadcastChannel("ms2.tabs");
+                this.channel.onmessage = e => {
+                    if (e.data !== "yield" || !this.release) return;
+                    // Synchronous, so the save is written before the other tab can load it.
+                    this.dotnet.invokeMethod("OnYield");
+                    this.release();
+                    this.release = null;
+                };
+            }
+            return this.acquire({ ifAvailable: true });
+        },
+        // Asks the playing tab to save and let go; takes over anyway if it does not answer (frozen tab).
+        async takeOver() {
+            if (!navigator.locks) return true;
+            this.channel?.postMessage("yield");
+            const wait = new AbortController();
+            const timer = setTimeout(() => wait.abort(), 3000);
+            const got = await this.acquire({ signal: wait.signal });
+            clearTimeout(timer);
+            return got || this.acquire({ steal: true });
+        },
+        // Resolves true once the lock is held, or false if it was not available.
+        acquire(options) {
+            return new Promise(resolve => {
+                let held = false;
+                navigator.locks.request(this.lockName, options, lock => {
+                    if (!lock) return resolve(false);
+                    held = true;
+                    resolve(true);
+                    return new Promise(r => this.release = r);
+                }).catch(() => {
+                    if (!held) return resolve(false); // the wait timed out
+                    // Another tab took over without our save (we did not answer in time): stop saving.
+                    this.release = null;
+                    this.dotnet.invokeMethodAsync("OnTakenOver");
+                });
+            });
+        },
+    },
+
     // Tells Endless Mode when the page loses focus or is hidden, so the run can pause.
     focus: {
         handler: null,

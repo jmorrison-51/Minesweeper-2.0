@@ -19,15 +19,25 @@ public enum GameMode
     Endless,
 }
 
+public enum TabState
+{
+    Checking,
+    Playing,
+    Elsewhere,
+}
+
 /// <summary>
 /// The signed-in player and which screen is showing. The web version is one page, so a single
 /// <see cref="SaveData"/> is shared by every screen (the desktop gives each window its own copy).
 /// </summary>
 public sealed class GameSession
 {
+    private readonly IJSInProcessRuntime _js;
+    private DotNetObjectReference<GameSession>? _self;
+
     public GameSession(IJSRuntime js)
     {
-        var inProcess = (IJSInProcessRuntime)js;
+        var inProcess = _js = (IJSInProcessRuntime)js;
         StorageAvailable = BrowserStorage.IsAvailable(inProcess);
         IKeyValueStore store = StorageAvailable ? new BrowserStorage(inProcess) : new MemoryKeyValueStore();
         Profiles = new KeyValueProfileStore(store);
@@ -52,6 +62,70 @@ public sealed class GameSession
 
     /// <summary>Raised when the screen, player or save warning changes, so the page re-renders.</summary>
     public event Action? Changed;
+
+    /// <summary>
+    /// Whether this tab is the one playing. Only one tab plays at a time (like the desktop's single instance),
+    /// because each tab holds its own <see cref="SaveData"/> and the last to save would wipe out the other.
+    /// </summary>
+    public TabState Tab { get; private set; } = TabState.Checking;
+
+    /// <summary>Raised just before this tab hands over to another, so a screen can record progress it has not saved yet.</summary>
+    public event Action? Yielding;
+
+    /// <summary>Claims the playing tab, unless another tab has it. Storage that is blocked is not shared, so needs no guard.</summary>
+    public async Task StartAsync()
+    {
+        if (!StorageAvailable)
+        {
+            Tab = TabState.Playing;
+            return;
+        }
+        _self = DotNetObjectReference.Create(this);
+        Tab = await _js.InvokeAsync<bool>("ms2.tab.start", _self) ? TabState.Playing : TabState.Elsewhere;
+    }
+
+    /// <summary>"Play here": the other tab saves and stops, then this one reloads the save it left.</summary>
+    public async Task TakeOverAsync()
+    {
+        if (Tab != TabState.Elsewhere) return;
+        Tab = TabState.Checking;
+        Changed?.Invoke();
+        await _js.InvokeAsync<bool>("ms2.tab.takeOver");
+        Tab = TabState.Playing;
+        SaveError = null;
+        string? player = IsAdmin ? CurrentProfile : Profiles.Find(CurrentProfile);
+        if (CurrentProfile.Length > 0 && player != null)
+        {
+            CurrentProfile = player;
+            Save = Profiles.Load(CurrentProfile);
+            Save.AdminUnlock = IsAdmin;
+            Show(Screen.Start);
+        }
+        else
+        {
+            CurrentProfile = "";
+            IsAdmin = false;
+            Show(Screen.Profiles); // no one was signed in, or the other tab deleted this player
+        }
+    }
+
+    /// <summary>Another tab asked to play: save now, while this tab still may, then stop.</summary>
+    [JSInvokable]
+    public void OnYield()
+    {
+        Yielding?.Invoke();
+        Persist();
+        Tab = TabState.Elsewhere;
+        Changed?.Invoke();
+    }
+
+    /// <summary>Another tab took over without waiting for this one: its save may be newer, so stop without saving.</summary>
+    [JSInvokable]
+    public void OnTakenOver()
+    {
+        Tab = TabState.Elsewhere;
+        Changed?.Invoke();
+    }
 
     public void SignIn(string name, bool isAdmin)
     {
@@ -82,7 +156,8 @@ public sealed class GameSession
     /// <summary>Writes the current player's save. A failure shows a warning banner until a save works again.</summary>
     public void Persist()
     {
-        if (CurrentProfile.Length == 0) return;
+        // A tab that is not playing may hold an old copy (screens also save as they close when it hands over).
+        if (CurrentProfile.Length == 0 || Tab != TabState.Playing) return;
         if (Profiles.TrySave(CurrentProfile, Save, out string error))
         {
             if (SaveError == null) return;

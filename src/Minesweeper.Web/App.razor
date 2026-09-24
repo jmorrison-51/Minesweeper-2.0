@@ -15,6 +15,22 @@
     </div>
 }
 
+@if (Session.Tab == TabState.Checking)
+{
+    return;
+}
+@if (Session.Tab == TabState.Elsewhere)
+{
+    <div class="screen center">
+        <div class="panel narrow error-panel">
+            <h2>Minesweeper 2.0 is open in another tab.</h2>
+            <p>Only one tab plays at a time, so they cannot overwrite each other's progress.</p>
+            <button class="mode-button small" @onclick="Session.TakeOverAsync">Play here instead</button>
+        </div>
+    </div>
+    return;
+}
+
 <ErrorBoundary @ref="_errors">
     <ChildContent>
         @switch (Session.Screen)
@@ -48,7 +64,11 @@
 @code {
     private ErrorBoundary? _errors;
 
-    protected override void OnInitialized() => Session.Changed += OnChanged;
+    protected override async Task OnInitializedAsync()
+    {
+        Session.Changed += OnChanged;
+        await Session.StartAsync();
+    }
 
     private void OnChanged() => InvokeAsync(StateHasChanged);
 

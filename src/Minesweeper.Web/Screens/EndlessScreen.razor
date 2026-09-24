@@ -118,7 +118,11 @@
         new MenuBar.Menu("Help", [new("Controls...", ShowControls, "F1")]),
     ];
 
-    protected override void OnInitialized() => _ = RunLoop();
+    protected override void OnInitialized()
+    {
+        Session.Yielding += OnPageHide; // handing over to another tab: count the run before that tab loads the save
+        _ = RunLoop();
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -286,6 +290,7 @@
     public async ValueTask DisposeAsync()
     {
         _stop.Cancel();
+        Session.Yielding -= OnPageHide;
         RecordRunSoFar(); // leaving mid-run still counts the run so far
         try
         {
