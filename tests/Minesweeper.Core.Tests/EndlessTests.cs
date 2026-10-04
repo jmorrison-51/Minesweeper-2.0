@@ -41,8 +41,48 @@ public class EndlessTests
             board.Reveal(1, seed % EndlessBoard.Columns);
 
             Assert.NotEqual(GameStatus.Lost, board.Status);
-            Assert.False(board[1, seed % EndlessBoard.Columns].IsMine);
+            if (board.IsVisibleRow(1)) Assert.False(board[1, seed % EndlessBoard.Columns].IsMine);
             AssertNumbersMatchMines(board);
+        }
+    }
+
+    [Fact]
+    public void EverySecondRowOfTheFirstSixArrivesWithTwoCellsOpen()
+    {
+        Assert.Equal(new[] { 4, 11 }, EndlessBoard.HeadStartColumns);
+        Assert.Equal(new[] { 0, 2, 4 }, Enumerable.Range(-1, 10).Where(EndlessBoard.IsHeadStartRow));
+
+        for (int seed = 0; seed < 200; seed++)
+        {
+            var board = new EndlessBoard(new Random(seed));
+            Assert.Equal(GameStatus.Ready, board.Status);
+            AssertHeadStart(board);
+
+            // The safe first click must not move its mine under an open cell.
+            int row = board.VisibleRows[^1];
+            board.Reveal(row, Enumerable.Range(0, EndlessBoard.Columns).First(x => board[row, x].State == CellState.Hidden));
+            Assert.Equal(GameStatus.Playing, board.Status);
+            AssertHeadStart(board);
+
+            for (int i = 0; i < 6 && board.Status == GameStatus.Playing; i++)
+            {
+                board.Advance(EndlessBoard.RowInterval(board.Elapsed) * 1.01);
+                AssertHeadStart(board);
+                AssertNumbersMatchMines(board);
+            }
+            Assert.Equal(GameStatus.Playing, board.Status);
+        }
+    }
+
+    private static void AssertHeadStart(EndlessBoard board)
+    {
+        foreach (int s in board.VisibleRows)
+        {
+            for (int x = 0; x < EndlessBoard.Columns; x++)
+                Assert.False(board[s, x].IsMine && board[s, x].State == CellState.Revealed);
+            if (!EndlessBoard.IsHeadStartRow(s)) continue;
+            foreach (int x in EndlessBoard.HeadStartColumns)
+                Assert.Equal(CellState.Revealed, board[s, x].State);
         }
     }
 
@@ -100,7 +140,8 @@ public class EndlessTests
     public void RevealingAMineLosesAndShowsTheMines()
     {
         var board = new EndlessBoard(new Random(5));
-        board.Reveal(1, 0);
+        var start = FirstSafeHidden(board, 1);
+        board.Reveal(start.Row, start.Col);
         var row = board.VisibleRows.First(s => Enumerable.Range(0, 16).Any(x => board[s, x].IsMine && board[s, x].State == CellState.Hidden));
         int mine = Enumerable.Range(0, 16).First(x => board[row, x].IsMine);
 

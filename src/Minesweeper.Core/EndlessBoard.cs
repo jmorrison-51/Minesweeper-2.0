@@ -29,6 +29,15 @@ public sealed class EndlessBoard
 
     public const int InitialRows = 2;
 
+    /// <summary>The first rows of a run that get a head start: every second one arrives with two cells open.</summary>
+    public const int HeadStartRows = 6;
+
+    /// <summary>The cells a head-start row opens: the fifth from each side.</summary>
+    public static readonly IReadOnlyList<int> HeadStartColumns = new[] { 4, Columns - 5 };
+
+    /// <summary>Whether this row arrives with its <see cref="HeadStartColumns"/> open (rows 0, 2 and 4).</summary>
+    public static bool IsHeadStartRow(int serial) => serial >= 0 && serial < HeadStartRows && (serial & 1) == 0;
+
     private sealed class Row
     {
         public Cell[] Cells = new Cell[Columns];
@@ -44,9 +53,12 @@ public sealed class EndlessBoard
     {
         _random = random ?? new Random();
         for (int serial = 0; serial <= InitialRows; serial++)
-            _rows[serial] = NewRow(serial < InitialRows);
+            _rows[serial] = NewRow(serial, serial < InitialRows);
         _newest = InitialRows - 1;
         RecountAll();
+        // No Settle here: the field stays as dealt until the first click, so a lucky deal cannot open
+        // (or remove) rows before the run has started. The first reveal settles it.
+        for (int serial = 0; serial < InitialRows; serial++) OpenHeadStart(serial);
     }
 
     public GameStatus Status { get; private set; } = GameStatus.Ready;
@@ -127,11 +139,14 @@ public sealed class EndlessBoard
         }
     }
 
-    private Row NewRow(bool visible)
+    private Row NewRow(int serial, bool visible)
     {
         var row = new Row { Visible = visible };
         int mines = 2 + (_random.Next(2)); // 2 or 3 of 16, about the density of Intermediate
-        var columns = Enumerable.Range(0, Columns).OrderBy(_ => _random.Next()).Take(mines);
+        bool headStart = IsHeadStartRow(serial);
+        var columns = Enumerable.Range(0, Columns)
+            .Where(c => !headStart || !HeadStartColumns.Contains(c))
+            .OrderBy(_ => _random.Next()).Take(mines);
         foreach (int c in columns) row.Cells[c].IsMine = true;
         return row;
     }
@@ -142,8 +157,9 @@ public sealed class EndlessBoard
         int serial = _newest + 1;
         _rows[serial].Visible = true;
         _newest = serial;
-        _rows[serial + 1] = NewRow(visible: false);
+        _rows[serial + 1] = NewRow(serial + 1, visible: false);
         Recount(serial);
+        OpenHeadStart(serial);
         Settle();
     }
 
@@ -159,6 +175,13 @@ public sealed class EndlessBoard
             for (int c = x + shift; c <= x + shift + 1; c++)
                 if (c >= 0 && c < Columns) yield return (s, c);
         }
+    }
+
+    // Head-start cells are never mines (NewRow and EnsureSafe keep mines off them), so this cannot lose.
+    private void OpenHeadStart(int serial)
+    {
+        if (!IsHeadStartRow(serial)) return;
+        foreach (int x in HeadStartColumns) _rows[serial].Cells[x].State = CellState.Revealed;
     }
 
     private void Recount(int serial)
@@ -180,7 +203,8 @@ public sealed class EndlessBoard
         var options = new List<(int Row, int Col)>();
         foreach (var (s, row) in _rows)
             for (int c = 0; c < Columns; c++)
-                if (!row.Cells[c].IsMine) options.Add((s, c));
+                if (!row.Cells[c].IsMine && row.Cells[c].State == CellState.Hidden
+                    && !(IsHeadStartRow(s) && HeadStartColumns.Contains(c))) options.Add((s, c));
 
         var (ds, dc) = options[_random.Next(options.Count)];
         _rows[serial].Cells[x].IsMine = false;
